@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>eNAT · Auto-Minter v2 / 代打工具</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f1ea; --ink: #0d0d0d; --paper: #ebe6dc; --line: #1a1a1a;
+    --muted: #6a6256; --accent: #c8472b; --ok: #1f6b3b; --warn: #b07b00;
+    --danger: #8a1414;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg); color: var(--ink);
+    font-family: 'Fraunces', Georgia, serif;
+    font-feature-settings: "ss01", "ss02"; line-height: 1.5;
+  }
+  body {
+    background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.04) 1px, transparent 0);
+    background-size: 6px 6px;
+    min-height: 100vh; padding: 32px 24px 80px;
+  }
+  .container { max-width: 1180px; margin: 0 auto; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  .masthead { border-top: 6px double var(--line); border-bottom: 1px solid var(--line); padding: 20px 0 12px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 16px; }
+  .masthead .left, .masthead .right { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+  .masthead .right { text-align: right; }
+  .masthead .center { text-align: center; font-size: clamp(28px, 5vw, 50px); font-weight: 800; letter-spacing: -0.03em; line-height: 1; font-style: italic; }
+  .masthead .center small { display: block; font-style: normal; font-weight: 400; font-size: 12px; letter-spacing: 0.3em; margin-top: 8px; color: var(--muted); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; }
+  .tagline { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.22em; text-align: center; text-transform: uppercase; color: var(--muted); padding: 12px 0; border-bottom: 1px solid var(--line); }
+
+  .plate { margin-top: 36px; padding: 18px 0 10px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  .plate .num { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--accent); }
+  .plate .title { font-size: clamp(20px, 2.6vw, 28px); font-weight: 600; letter-spacing: -0.02em; font-style: italic; }
+  .plate .right { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+
+  .notice { margin-top: 16px; padding: 14px 18px; border: 1px solid var(--line); background: var(--paper); font-size: 14px; line-height: 1.65; position: relative; }
+  .notice::before { content: "§"; position: absolute; left: -1px; top: -1px; background: var(--ink); color: var(--bg); font-family: 'JetBrains Mono', monospace; padding: 4px 8px; font-size: 12px; }
+  .notice b { font-weight: 700; }
+  .notice .accent { color: var(--accent); font-weight: 700; }
+  .notice.danger { background: #f8e7e1; border-color: var(--danger); }
+  .notice.danger::before { background: var(--danger); }
+
+  .tabs { display: flex; gap: 0; margin-top: 16px; border: 1px solid var(--line); }
+  .tab { flex: 1; padding: 12px 18px; font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer; background: var(--paper); border-right: 1px solid var(--line); text-align: center; user-select: none; }
+  .tab:last-child { border-right: none; }
+  .tab.active { background: var(--ink); color: var(--bg); }
+  .tab .badge { font-size: 9px; opacity: 0.6; display: block; margin-top: 2px; }
+
+  .tab-body { border: 1px solid var(--line); border-top: none; padding: 18px; background: var(--paper); }
+  .hide { display: none !important; }
+
+  .pill { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; padding: 5px 10px; border: 1px solid var(--line); display: inline-block; }
+  .pill.live { background: var(--ok); color: var(--bg); border-color: var(--ok); }
+  .pill.warn { background: var(--warn); color: var(--bg); border-color: var(--warn); }
+  .pill.bad { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .pill.danger { background: var(--danger); color: var(--bg); border-color: var(--danger); }
+
+  .btn { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; padding: 10px 18px; border: 1px solid var(--line); background: var(--ink); color: var(--bg); cursor: pointer; transition: transform 0.1s, background 0.15s; }
+  .btn:hover { transform: translate(-1px,-1px); box-shadow: 2px 2px 0 var(--line); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn.outline { background: transparent; color: var(--ink); }
+  .btn.danger { background: var(--accent); border-color: var(--accent); }
+  .btn.danger-strong { background: var(--danger); border-color: var(--danger); }
+  .btn.tiny { padding: 6px 10px; font-size: 9px; letter-spacing: 0.15em; }
+
+  .stats { margin-top: 14px; display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); background: var(--paper); }
+  .stats .cell { padding: 18px 18px 16px; border-right: 1px solid var(--line); }
+  .stats .cell:last-child { border-right: none; }
+  .stats .cell .label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .stats .cell .value { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  .stats .cell .sub { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); margin-top: 6px; }
+
+  .field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 18px; }
+  .field-grid.two { grid-template-columns: 1fr 1fr; }
+  .field label { display: block; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .field input { width: 100%; padding: 9px 11px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+  .field input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .field input.danger-input { background: #fff5f0; border-color: var(--danger); }
+  .field .hint { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+  .switch-row { margin-top: 22px; padding-top: 18px; border-top: 1px dashed var(--line); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: space-between; }
+  .switch-wrap { display: flex; align-items: center; gap: 14px; }
+  .switch { position: relative; width: 52px; height: 28px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; background: var(--ink); transition: 0.18s; }
+  .switch.on { background: var(--ok); }
+  .switch.on::after { left: 26px; background: var(--bg); }
+  .switch-label { font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; }
+
+  .panel { margin-top: 24px; border: 1px solid var(--line); background: var(--paper); }
+  .panel-head { padding: 12px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  .panel-head .h { font-style: italic; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .panel-head .meta { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+  .panel-body { padding: 18px; }
+  .log-wrap { margin: 0 18px 18px; border: 1px solid var(--line); background: var(--bg); max-height: 380px; overflow-y: auto; }
+  .log-head, .log-row { display: grid; grid-template-columns: 110px 110px 110px 1fr 110px; gap: 12px; padding: 8px 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px; border-bottom: 1px solid var(--line); align-items: center; }
+  .log-head { font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); background: var(--paper); position: sticky; top: 0; }
+  .log-row .status { font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.1em; }
+  .log-row .status.ok { color: var(--ok); }
+  .log-row .status.err { color: var(--accent); }
+  .log-row .status.pend { color: var(--warn); }
+  .log-row a { color: var(--ink); text-decoration: underline; text-decoration-style: dashed; }
+  .log-row a:hover { color: var(--accent); }
+
+  /* Presets */
+  .presets-row { margin-bottom: 16px; }
+  .presets-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .presets-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .preset-btn { background: var(--bg); border: 2px solid var(--line); padding: 12px 14px; cursor: pointer; text-align: left; font-family: inherit; transition: transform 0.1s, border-color 0.15s; }
+  .preset-btn:hover { transform: translate(-1px,-1px); border-color: var(--accent); box-shadow: 2px 2px 0 var(--line); }
+  .preset-btn.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .preset-btn.active .pn-cost { color: #f9d34a; }
+  .preset-btn.active .pn-desc { color: #c9c2b3; }
+  .pn-name { font-style: italic; font-size: 16px; font-weight: 700; line-height: 1.1; margin-bottom: 4px; }
+  .pn-cost { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
+  .pn-desc { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); letter-spacing: 0.05em; }
+
+  .cost-banner { margin-top: 14px; margin-bottom: 6px; padding: 10px 14px; background: var(--ink); color: var(--bg); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-family: 'JetBrains Mono', monospace; }
+  .cost-banner .lab { font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; opacity: 0.6; }
+  .cost-banner .val { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; color: #f9d34a; }
+  .cost-banner .hint { font-size: 10px; opacity: 0.7; }
+
+  .holdings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+  .hold-card { border: 1px solid var(--line); background: var(--paper); padding: 18px; }
+  .hold-card h4 { font-style: italic; font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+  .hold-card .src { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 14px; }
+  .hold-card .big { font-family: 'JetBrains Mono', monospace; font-size: 42px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  .hold-card .big.small { font-size: 28px; }
+  .hold-card .lab { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .hold-card .row { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  .mints-table { margin-top: 0; border: 1px solid var(--line); background: var(--bg); max-height: 360px; overflow-y: auto; }
+  .mt-head, .mt-row { display: grid; grid-template-columns: 90px 130px 1fr 100px 110px; gap: 12px; padding: 8px 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px; border-bottom: 1px solid var(--line); align-items: center; }
+  .mt-head { font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); background: var(--paper); position: sticky; top: 0; }
+  .mt-row .status { font-weight: 700; }
+  .mt-row .status.ok { color: var(--ok); }
+  .mt-row .status.err { color: var(--accent); }
+  .mt-row a { color: var(--ink); text-decoration: underline dashed; }
+
+  .footer { margin-top: 60px; border-top: 6px double var(--line); padding-top: 20px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); text-align: center; line-height: 2; }
+
+  .action-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+
+  @media (max-width: 820px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stats .cell:nth-child(2) { border-right: none; }
+    .stats .cell:nth-child(1), .stats .cell:nth-child(2) { border-bottom: 1px solid var(--line); }
+    .field-grid, .field-grid.two { grid-template-columns: 1fr 1fr; }
+    .holdings-grid { grid-template-columns: 1fr; }
+    .presets-grid { grid-template-columns: 1fr 1fr; }
+    .log-head, .log-row { grid-template-columns: 70px 90px 80px 1fr; font-size: 11px; }
+    .log-head .gas, .log-row .gas { display: none; }
+    .mt-head, .mt-row { grid-template-columns: 70px 90px 1fr 90px; font-size: 11px; }
+    .mt-head .pos, .mt-row .pos { display: none; }
+    .masthead { grid-template-columns: 1fr; text-align: center; }
+    .masthead .left, .masthead .right { text-align: center; }
+  }
+  @media (max-width: 520px) {
+    .field-grid, .field-grid.two { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header class="masthead">
+  <div class="left">eDMT · Vol I · No 2 · Racing Edition</div>
+  <div class="center">eNAT Auto-Minter<small>FORGED · BY · BURN — 代打 + 战绩查看</small></div>
+  <div class="right" id="rightStamp">Ξ MAINNET</div>
+</header>
+<div class="tagline">monitor · race · sign · broadcast — first valid in canonical chain order wins</div>
+
+<!-- Plate 0 -->
+<div class="plate">
+  <span class="num">Plate 0 · 警示</span>
+  <span class="title">Read before signing.</span>
+  <span class="right">non-custodial · open-source</span>
+</div>
+<div class="notice">
+  <b>真实 ETH 交易工具。</b> 每次 mint 尝试都消耗 gas（即使输了竞速 gas 仍会扣)。所有签名本地完成,代码完全本地运行,无后端、无遥测。
+  <span class="accent">▶</span> 协议规则: 每个 (tick, blk) 只允许第一个合规的 emt-mint 在 canonical chain order 中获胜 — 工具只能尽快尝试,无法保证你赢。
+  <span class="accent">▶</span> 仅支持 pre-activation 块(无 capture fee)。
+</div>
+<div class="notice danger" style="margin-top:10px;">
+  <b style="color:var(--danger);">Hot Key 模式专属警告:</b> Hot Key 模式要求你在表单里粘贴<b>钱包私钥</b>。私钥只存在浏览器内存,刷新即丢失,但有以下风险:
+  ① 任何浏览器扩展/恶意脚本可能读取页面内存; ② 截屏/录屏可能泄漏; ③ 关闭页面前未停止 mint 会留下 orphan tx。
+  <br>
+  <span style="color:var(--danger); font-weight:700;">▶ 强烈建议: 创建一个全新的"代打专用钱包",只转入打算花的 gas (例如 0.05 ETH),mint 完后立即把剩余 ETH 提走。绝不要用主钱包私钥。</span>
+</div>
+
+<!-- Plate I -->
+<div class="plate">
+  <span class="num">Plate I · 连接</span>
+  <span class="title">Two modes for two needs.</span>
+  <span class="right">mode 选择影响竞速速度</span>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-mode="metamask">
+    Mode A · MetaMask
+    <span class="badge">每笔需手动确认 · 不抢</span>
+  </div>
+  <div class="tab" data-mode="hotkey">
+    Mode B · Hot Key (本地私钥)
+    <span class="badge">无人值守 · 抢速度</span>
+  </div>
+</div>
+
+<div class="tab-body" id="metamaskBody">
+  <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+    <span id="mmStatus" class="pill bad">未连接</span>
+    <span class="addr mono" id="mmAddr" style="flex:1; font-size:13px; color:var(--muted);">—</span>
+    <button id="mmConnectBtn" class="btn">Connect MetaMask</button>
+  </div>
+  <div class="hint" style="margin-top:10px; color:var(--muted); font-family:'JetBrains Mono',monospace; font-size:11px;">
+    每笔 tx 需点弹窗确认 · 适合 casual 模式 · 慢但安全
+  </div>
+</div>
+
+<div class="tab-body hide" id="hotkeyBody">
+  <div class="field-grid two">
+    <div class="field" style="grid-column: 1 / -1;">
+      <label>WebSocket RPC URL (推荐 Alchemy / Infura 自己的 key 抢得最快)</label>
+      <input id="rpcInput" value="wss://ethereum-rpc.publicnode.com" class="mono" />
+      <div class="hint">free fallback: PublicNode · Alchemy: wss://eth-mainnet.g.alchemy.com/v2/&lt;KEY&gt; · Infura: wss://mainnet.infura.io/ws/v3/&lt;KEY&gt;</div>
+    </div>
+    <div class="field" style="grid-column: 1 / -1;">
+      <label style="color:var(--danger);">⚠ 私钥 / Private Key (0x... 64 hex chars · 内存only · 不持久化)</label>
+      <input id="pkInput" type="password" placeholder="0x..." class="mono danger-input" autocomplete="off" />
+      <div class="hint" style="color:var(--danger);">用 burner wallet 不要用主钱包 · F12 看源码可验证我们没把它发到任何地方</div>
+    </div>
+  </div>
+  <div style="margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+    <span id="hkStatus" class="pill bad">未连接</span>
+    <span class="addr mono" id="hkAddr" style="flex:1; font-size:13px; color:var(--muted);">—</span>
+    <button id="hkConnectBtn" class="btn danger-strong">Initialize Hot Key</button>
+    <button id="hkDisconnectBtn" class="btn outline" disabled>Disconnect &amp; Wipe</button>
+  </div>
+  <div class="hint" style="margin-top:10px; color:var(--muted); font-family:'JetBrains Mono',monospace; font-size:11px;">
+    本地签名 + WebSocket newHeads 订阅 · 块到达后 ~100-200ms 完成广播 · 唯一可"抢"的模式
+  </div>
+</div>
+
+<!-- Plate II -->
+<div class="plate">
+  <span class="num">Plate II · 实时状态</span>
+  <span class="title">Chain state, refreshed each block.</span>
+  <span class="right" id="lagStamp">tip — </span>
+</div>
+<div class="stats">
+  <div class="cell">
+    <div class="label">Latest Block</div>
+    <div class="value" id="latestBlock">—</div>
+    <div class="sub" id="latestBlockTime">awaiting connection</div>
+  </div>
+  <div class="cell">
+    <div class="label">Block Burn (gwei)</div>
+    <div class="value" id="latestBurn">—</div>
+    <div class="sub" id="burnSub">baseFee × gasUsed / 10⁹</div>
+  </div>
+  <div class="cell">
+    <div class="label">Wallet Balance (ETH)</div>
+    <div class="value" id="ethBalance">—</div>
+    <div class="sub" id="balanceSub">—</div>
+  </div>
+  <div class="cell">
+    <div class="label">Mints · ok / total</div>
+    <div class="value" id="successCount">0 / 0</div>
+    <div class="sub" id="costSub">spent: 0.0000 ETH</div>
+  </div>
+</div>
+
+<!-- Plate III -->
+<div class="plate">
+  <span class="num">Plate III · 参数</span>
+  <span class="title">Mint policy.</span>
+  <span class="right">self-send · type-2 tx</span>
+</div>
+<div class="panel">
+  <div class="panel-head">
+    <span class="h">Bidding parameters</span>
+    <span class="meta">默认偏保守 · 抢需要拉高 priority fee</span>
+  </div>
+  <div class="panel-body">
+    <div class="presets-row">
+      <div class="presets-label">⚡ 一键预设 / Quick presets · 选一个就行,不用看下面参数</div>
+      <div class="presets-grid">
+        <button class="preset-btn" data-preset="cheap">
+          <div class="pn-name">🐢 试水</div>
+          <div class="pn-cost">~$0.10/笔</div>
+          <div class="pn-desc">最低预算 · 看着玩</div>
+        </button>
+        <button class="preset-btn active" data-preset="balanced">
+          <div class="pn-name">⚡ 平衡 ⭐</div>
+          <div class="pn-cost">~$0.40/笔</div>
+          <div class="pn-desc">推荐 · 抢得动</div>
+        </button>
+        <button class="preset-btn" data-preset="aggressive">
+          <div class="pn-name">🔥 抢狠</div>
+          <div class="pn-cost">~$1.00/笔</div>
+          <div class="pn-desc">高 burn 块专用</div>
+        </button>
+        <button class="preset-btn" data-preset="historical">
+          <div class="pn-name">🔍 捡历史漏</div>
+          <div class="pn-cost">~$0.15/笔</div>
+          <div class="pn-desc">无竞争 · 稳赢</div>
+        </button>
+      </div>
+    </div>
+
+    <div class="cost-banner">
+      <div>
+        <div class="lab">当前预估单笔成本 / per-attempt cost</div>
+        <div class="val" id="costEstimate">—</div>
+      </div>
+      <div class="hint" id="costHint">连接钱包后自动计算 · ETH价格自 CoinGecko</div>
+    </div>
+
+    <div class="field-grid">
+      <div class="field"><label>Ticker</label><input id="tickInput" value="enat" class="mono" /></div>
+      <div class="field"><label>Block target offset</label><input id="offsetInput" type="number" value="0" />
+        <div class="hint">0 = 当前块, -1 = 上一个 · sweep 模式忽略此值</div>
+      </div>
+      <div class="field"><label>Min burn (gwei)</label><input id="minBurnInput" type="number" value="1" min="1" />
+        <div class="hint" id="minBurnDisplay">≥ 1 gwei (基本不过滤)</div>
+      </div>
+      <div class="field"><label>Max fee/gas (gwei)</label><input id="maxGasInput" type="number" value="20" /></div>
+      <div class="field"><label>Priority fee (gwei)</label><input id="priorityFeeInput" type="number" value="0.5" step="0.1" />
+        <div class="hint">越高竞速越前 · 越烧</div>
+      </div>
+      <div class="field"><label>Gas limit</label><input id="gasLimitInput" type="number" value="60000" /></div>
+      <div class="field"><label>Rate limit (mints/60s)</label><input id="rateLimitInput" type="number" value="6" /></div>
+      <div class="field"><label>Max attempts (cap)</label><input id="maxAttemptsInput" type="number" value="50" /></div>
+      <div class="field"><label>Max ETH spend (cap)</label><input id="maxSpendInput" type="number" value="0.02" step="0.001" /></div>
+    </div>
+
+    <!-- Sweep range mode -->
+    <div style="margin-top:18px; border-top:1px solid var(--line); padding-top:14px;">
+      <div style="display:flex; align-items:center; gap:14px; margin-bottom:10px;">
+        <label style="display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono',monospace; font-size:11px; cursor:pointer;">
+          <input type="checkbox" id="sweepModeToggle" style="width:16px; height:16px;" />
+          <span style="font-weight:700;">SWEEP 模式 · 横扫指定块号区段</span>
+        </label>
+        <span style="font-size:11px; color:var(--muted);">勾上后忽略 offset,直接遍历 [起,止]</span>
+      </div>
+      <div class="field-grid" id="sweepFields" style="opacity:0.4; pointer-events:none;">
+        <div class="field"><label>Sweep 起始块号 / from</label><input id="sweepFromInput" type="number" placeholder="14690500" />
+          <div class="hint">从这个块号开始打</div>
+        </div>
+        <div class="field"><label>Sweep 结束块号 / to</label><input id="sweepToInput" type="number" placeholder="14720000" />
+          <div class="hint">打到这个块号停 (含)</div>
+        </div>
+        <div class="field"><label>方向 / direction</label>
+          <select id="sweepDirInput" style="width:100%; padding:8px 10px; border:1px solid var(--line); background:var(--bg); font-family:'JetBrains Mono',monospace; font-size:12px;">
+            <option value="asc">↑ 从小到大</option>
+            <option value="desc">↓ 从大到小</option>
+            <option value="random">⇄ 随机</option>
+          </select>
+        </div>
+        <div class="field"><label>批并发 / concurrency</label><input id="sweepConcurrencyInput" type="number" value="1" min="1" max="10" />
+          <div class="hint">默认 1 · 全局硬限速 1 笔/秒</div>
+        </div>
+      </div>
+      <div id="sweepProgress" style="margin-top:10px; padding:8px 12px; background:var(--bg); border:1px solid var(--line); font-family:'JetBrains Mono',monospace; font-size:11px; display:none;">
+        <span id="sweepProgressText">—</span>
+      </div>
+    </div>
+
+    <div class="switch-row">
+      <div class="switch-wrap">
+        <div class="switch" id="autoSwitch"></div>
+        <span class="switch-label">Auto-mint <span id="autoStatusTxt">OFF</span></span>
+      </div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <button id="manualMintBtn" class="btn outline">▶ Manual mint (latest)</button>
+        <button id="stopBtn" class="btn danger" disabled>■ STOP</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="log-wrap">
+    <div class="log-head">
+      <div>STATUS</div>
+      <div>BLOCK</div>
+      <div>BURN gwei</div>
+      <div>TX HASH</div>
+      <div class="gas">COST/LATENCY</div>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<!-- Plate IV: Holdings -->
+<div class="plate">
+  <span class="num">Plate IV · 我的战绩</span>
+  <span class="title">How many blocks have you actually captured?</span>
+  <span class="right" id="holdingsRefreshTime">—</span>
+</div>
+
+<div class="holdings-grid">
+  <div class="hold-card">
+    <h4>Confirmed wholes / 真实持仓</h4>
+    <div class="src">SOURCE: edmt.io indexer · 只算赢的 · 刚 mint 的需等 12-15 分钟 finality 才显示</div>
+    <div class="big" id="confirmedWholes">—</div>
+    <div class="lab">whole eNATs (协议层认可)</div>
+    <div class="row">
+      <span>Held burn:</span>
+      <span class="mono" id="confirmedBurn">—</span>
+    </div>
+    <div class="row" style="border-top:none; padding-top:4px;">
+      <span>Fragment balance:</span>
+      <span class="mono" id="confirmedFrag">—</span>
+    </div>
+    <div class="action-bar">
+      <button id="fetchHoldingsBtn" class="btn tiny">↻ Refresh</button>
+      <a id="profileLink" class="btn tiny outline" href="#" target="_blank" rel="noopener">Open profile ↗</a>
+    </div>
+  </div>
+
+  <div class="hold-card">
+    <h4>本次 session / This session</h4>
+    <div class="src">SOURCE: 工具内存 · 实时 · 不需要任何 API</div>
+    <div class="big" id="sessionMined">0</div>
+    <div class="lab">成功 mint 数 / mined</div>
+    <div class="row">
+      <span>失败 (revert/dropped/rejected):</span>
+      <span class="mono" id="sessionFailed">0</span>
+    </div>
+    <div class="row" style="border-top:none; padding-top:4px;">
+      <span>已花费 spent:</span>
+      <span class="mono" id="sessionSpent" style="color:var(--accent); font-weight:700;">$0.00</span>
+    </div>
+    <div class="row" style="border-top:none; padding-top:4px;">
+      <span>跨 session 全历史扫描:</span>
+      <span style="display:flex; gap:6px;">
+        <input id="etherscanKey" placeholder="Etherscan key (可选)" class="mono" style="width:130px; padding:4px 8px; border:1px solid var(--line); background:var(--bg); font-size:10px;" />
+        <button id="fetchSubmittedBtn" class="btn tiny">↻ Scan</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:16px;">
+  <div class="panel-head">
+    <span class="h">Mint history detail · 每笔记录</span>
+    <span class="meta" id="historyMeta">本次 session · 实时同步</span>
+  </div>
+  <div class="mints-table" id="mintsTableWrap">
+    <div class="mt-head">
+      <div>STATUS</div>
+      <div>TARGET BLK</div>
+      <div>TX HASH</div>
+      <div class="pos">COST</div>
+      <div>WHEN</div>
+    </div>
+    <div id="mintsList" style="padding: 12px 14px; color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+      连接钱包后点 Scan,从 Etherscan 拉历史。
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  EDMT.IO · Reference protocol · Built locally · No analytics, no backend, no telemetry<br>
+  源码 view-source 可审计 · CC-BY-4.0 spec · MIT for this tool
+</div>
+</div>
+
+<script>
+(() => {
+  // ============ State ============
+  let mode = 'metamask';
+  let provider = null;
+  let signer = null;
+  let userAddress = null;
+  let chainId = null;
+  let autoMint = false;
+  let watching = false;
+  let attempts = 0;
+  let successes = 0;
+  let totalCostWei = 0n;
+  let recentMints = [];
+  const mintedThisSession = new Set();
+  let lastSeenBlock = 0;
+  let cachedNonce = null;
+
+  // ============ DOM helpers ============
+  const $ = id => document.getElementById(id);
+  const logEl = $('log');
+  const fmtAddr = a => a ? a.slice(0,6) + '…' + a.slice(-4) : '—';
+  const nowStamp = () => new Date().toTimeString().slice(0,8);
+  const setPill = (el, cls, txt) => { el.className = 'pill ' + cls; el.textContent = txt; };
+
+  function addLog(status, block, burn, txHash, cost, level = 'pend') {
+    const row = document.createElement('div');
+    row.className = 'log-row';
+    const txCell = txHash
+      ? `<a href="https://etherscan.io/tx/${txHash}" target="_blank" rel="noopener">${txHash.slice(0,10)}…${txHash.slice(-6)}</a>`
+      : `<span style="color: var(--muted);">${nowStamp()}</span>`;
+    row.innerHTML = `
+      <div class="status ${level}">${status}</div>
+      <div>${block ?? '—'}</div>
+      <div>${burn ?? '—'}</div>
+      <div>${txCell}</div>
+      <div class="gas" style="color: var(--muted);">${cost ?? '—'}</div>
+    `;
+    logEl.insertBefore(row, logEl.firstChild);
+    while (logEl.children.length > 200) logEl.removeChild(logEl.lastChild);
+    return row;
+  }
+  function updateStats() {
+    $('successCount').textContent = `${successes} / ${attempts}`;
+    const ethSpent = parseFloat(ethers.formatEther(totalCostWei));
+    const usdSpent = ethSpent * ethPriceUSD;
+    $('costSub').textContent = `spent: $${usdSpent.toFixed(2)} (${ethSpent.toFixed(5)} ETH)`;
+  }
+
+  // ============ Session mint tracker (in-memory, no API needed) ============
+  const sessionMints = [];   // newest first: {target, burn, txHash, status, costEth, costUsd, inclusionBlock, time, error}
+
+  function pushSessionMint(entry) {
+    sessionMints.unshift(entry);
+    renderSession();
+  }
+  function updateSessionMint(txHash, updates) {
+    const idx = sessionMints.findIndex(m => m.txHash === txHash);
+    if (idx >= 0) {
+      sessionMints[idx] = { ...sessionMints[idx], ...updates };
+      renderSession();
+    }
+  }
+
+  function renderSession() {
+    const mined = sessionMints.filter(m => m.status === 'mined').length;
+    const failed = sessionMints.filter(m => ['reverted','dropped','rejected','error'].includes(m.status)).length;
+    const totalUsd = sessionMints.reduce((s, m) => s + (m.costUsd || 0), 0);
+
+    $('sessionMined').textContent = mined;
+    $('sessionFailed').textContent = failed;
+    $('sessionSpent').textContent = '$' + totalUsd.toFixed(2);
+    $('historyMeta').textContent = `本次 session · ${sessionMints.length} 条记录`;
+
+    const list = $('mintsList');
+    if (sessionMints.length === 0) {
+      list.innerHTML = '<div style="padding:14px;color:var(--muted); font-size:12px;">还没 mint。打开 Auto-mint 后,每笔交易会出现在这里 · 不用任何 API。</div>';
+      return;
+    }
+    list.style.padding = '0';
+    list.innerHTML = '';
+    const STATUS_TXT = {
+      pending: 'PENDING', mined: 'MINED ✓', reverted: 'REVERTED',
+      dropped: 'DROPPED', rejected: 'REJECTED', error: 'ERROR'
+    };
+    for (const m of sessionMints.slice(0, 200)) {
+      const row = document.createElement('div');
+      row.className = 'mt-row';
+      const statusText = STATUS_TXT[m.status] || (m.status || '').toUpperCase();
+      const statusCls = m.status === 'mined' ? 'ok' : m.status === 'pending' ? 'pend' : 'err';
+      const t = new Date(m.time);
+      const timeStr = t.toTimeString().slice(0,8);
+      const txCell = m.txHash
+        ? `<a href="https://etherscan.io/tx/${m.txHash}" target="_blank" rel="noopener">${m.txHash.slice(0,10)}…${m.txHash.slice(-6)}</a>`
+        : '<span style="color:var(--muted);">—</span>';
+      const blkCell = m.target
+        ? `<a href="https://www.edmt.io/en/explore/blk/${m.target}" target="_blank" rel="noopener">#${Number(m.target).toLocaleString()}</a>`
+        : '—';
+      const costCell = m.costUsd != null ? '$' + m.costUsd.toFixed(3) : '—';
+      row.innerHTML = `
+        <div class="status ${statusCls}">${statusText}</div>
+        <div>${blkCell}</div>
+        <div>${txCell}</div>
+        <div class="pos" style="color:var(--muted);">${costCell}</div>
+        <div style="color:var(--muted);">${timeStr}</div>
+      `;
+      list.appendChild(row);
+    }
+  }
+
+  // ============ Tab switch ============
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      if (autoMint) { alert('请先 STOP auto-mint 再切换模式'); return; }
+      const m = tab.dataset.mode;
+      if (m === mode) return;
+      teardownConnection();
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+      $('metamaskBody').classList.toggle('hide', m !== 'metamask');
+      $('hotkeyBody').classList.toggle('hide', m !== 'hotkey');
+      mode = m;
+    });
+  });
+
+  function teardownConnection() {
+    if (provider) {
+      try { provider.removeAllListeners('block'); } catch(e){}
+      try { if (provider.destroy) provider.destroy(); } catch(e){}
+    }
+    provider = null; signer = null; userAddress = null; chainId = null;
+    watching = false; cachedNonce = null;
+    $('latestBlock').textContent = '—';
+    $('latestBurn').textContent = '—';
+    $('ethBalance').textContent = '—';
+    setPill($('mmStatus'), 'bad', '未连接');
+    setPill($('hkStatus'), 'bad', '未连接');
+    $('mmAddr').textContent = '—'; $('hkAddr').textContent = '—';
+    $('mmConnectBtn').disabled = false; $('mmConnectBtn').textContent = 'Connect MetaMask';
+    $('hkConnectBtn').disabled = false; $('hkConnectBtn').textContent = 'Initialize Hot Key';
+    $('hkDisconnectBtn').disabled = true;
+  }
+
+  // ============ MetaMask ============
+  async function connectMetaMask() {
+    if (!window.ethereum) { alert('未检测到浏览器钱包'); return; }
+    try {
+      provider = new ethers.BrowserProvider(window.ethereum, 'any');
+      provider.pollingInterval = 2000;
+      await provider.send('eth_requestAccounts', []);
+      signer = await provider.getSigner();
+      userAddress = await signer.getAddress();
+      const network = await provider.getNetwork();
+      chainId = Number(network.chainId);
+
+      setPill($('mmStatus'), chainId === 1 ? 'live' : 'warn',
+        chainId === 1 ? '已连接 · MAINNET' : `⚠ chain ${chainId}`);
+      $('mmAddr').textContent = userAddress + '   (' + fmtAddr(userAddress) + ')';
+      $('mmConnectBtn').textContent = '已连接'; $('mmConnectBtn').disabled = true;
+
+      await refreshBalance();
+      startBlockWatcher();
+      addLog('CONNECTED · MM', null, null, null, fmtAddr(userAddress), 'ok');
+      updateProfileLink();
+      autoFetchAfterConnect();
+
+      window.ethereum.on('accountsChanged', () => location.reload());
+      window.ethereum.on('chainChanged', () => location.reload());
+    } catch (err) { console.error(err); alert('连接失败: ' + (err.message || err)); }
+  }
+
+  // ============ Hot Key ============
+  async function connectHotKey() {
+    const rpc = $('rpcInput').value.trim();
+    const pk = $('pkInput').value.trim();
+    if (!rpc.startsWith('ws')) { alert('RPC 必须是 wss:// 或 ws:// (WebSocket)'); return; }
+    let cleanPk = pk;
+    if (!cleanPk.startsWith('0x')) cleanPk = '0x' + cleanPk;
+    if (cleanPk.length !== 66 || !/^0x[0-9a-fA-F]{64}$/.test(cleanPk)) {
+      alert('私钥格式不对 — 必须是 0x 开头的 64 hex 字符'); return;
+    }
+
+    try {
+      $('hkConnectBtn').disabled = true;
+      $('hkConnectBtn').textContent = 'Connecting…';
+      provider = new ethers.WebSocketProvider(rpc);
+      const network = await Promise.race([
+        provider.getNetwork(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('RPC 超时,换一个 endpoint')), 8000))
+      ]);
+      chainId = Number(network.chainId);
+      if (chainId !== 1) {
+        alert('RPC 不是 mainnet (chainId=' + chainId + ')');
+        try{ provider.destroy?.(); }catch(e){} provider = null;
+        $('hkConnectBtn').disabled = false; $('hkConnectBtn').textContent = 'Initialize Hot Key';
+        return;
+      }
+      const wallet = new ethers.Wallet(cleanPk, provider);
+      signer = wallet;
+      userAddress = wallet.address;
+
+      cachedNonce = await provider.getTransactionCount(userAddress, 'pending');
+
+      // wipe key from input (in memory only)
+      $('pkInput').value = '';
+
+      setPill($('hkStatus'), 'live', '已连接 · MAINNET · WSS');
+      $('hkAddr').textContent = userAddress + '   (' + fmtAddr(userAddress) + ')';
+      $('hkConnectBtn').textContent = 'Connected';
+      $('hkDisconnectBtn').disabled = false;
+
+      await refreshBalance();
+      startBlockWatcher();
+      addLog('CONNECTED · HK', null, null, null, fmtAddr(userAddress), 'ok');
+      updateProfileLink();
+      autoFetchAfterConnect();
+    } catch (err) {
+      console.error(err);
+      alert('Hot Key 初始化失败: ' + (err.message || err));
+      try { provider?.destroy?.(); } catch(e){}
+      provider = null;
+      $('hkConnectBtn').disabled = false; $('hkConnectBtn').textContent = 'Initialize Hot Key';
+    }
+  }
+
+  function disconnectHotKey() {
+    if (autoMint) setAuto(false, 'disconnect');
+    teardownConnection();
+    addLog('DISCONNECTED · KEY WIPED', null, null, null, '—', 'err');
+  }
+
+  async function refreshBalance() {
+    if (!provider || !userAddress) return;
+    try {
+      const bal = await provider.getBalance(userAddress);
+      $('ethBalance').textContent = parseFloat(ethers.formatEther(bal)).toFixed(4);
+      $('balanceSub').textContent = fmtAddr(userAddress);
+    } catch(e){}
+  }
+
+  function startBlockWatcher() {
+    if (watching) return;
+    watching = true;
+    provider.on('block', onNewBlock);
+    setInterval(refreshBalance, 30_000);
+  }
+
+  async function onNewBlock(blockNumber) {
+    if (blockNumber === lastSeenBlock) return;
+    lastSeenBlock = blockNumber;
+    $('latestBlock').textContent = blockNumber.toLocaleString();
+    $('latestBlockTime').textContent = '@ ' + nowStamp();
+    $('lagStamp').textContent = 'tip #' + blockNumber.toLocaleString();
+    try {
+      const block = await provider.getBlock(blockNumber);
+      if (!block || !block.baseFeePerGas || !block.gasUsed) return;
+      const burnGwei = (block.baseFeePerGas * block.gasUsed) / 1_000_000_000n;
+      $('latestBurn').textContent = burnGwei.toString();
+      $('burnSub').textContent = `baseFee=${ethers.formatUnits(block.baseFeePerGas,'gwei').slice(0,6)} gw · gasUsed=${(Number(block.gasUsed)/1e6).toFixed(2)}M`;
+
+      // Update live baseFee for cost estimator
+      baseFeeGwei = parseFloat(ethers.formatUnits(block.baseFeePerGas, 'gwei'));
+      updateCostEstimate();
+
+      if (autoMint && !$('sweepModeToggle').checked) {
+        const offset = parseInt($('offsetInput').value || '0', 10);
+        const targetBlock = blockNumber + offset;
+        let targetBurn = burnGwei;
+        if (offset !== 0) {
+          const targetData = await provider.getBlock(targetBlock);
+          if (!targetData || !targetData.baseFeePerGas || !targetData.gasUsed) return;
+          targetBurn = (targetData.baseFeePerGas * targetData.gasUsed) / 1_000_000_000n;
+        }
+        await tryMint(targetBlock, targetBurn);
+      }
+    } catch (e) { console.error('block handler', e); }
+  }
+
+  async function tryMint(blockNumber, burnGwei) {
+    if (!signer) return;
+    if (chainId !== 1) {
+      addLog('SKIP non-mainnet', blockNumber, burnGwei.toString(), null, null, 'err'); return;
+    }
+    if (mintedThisSession.has(blockNumber)) return;
+
+    const minBurn = BigInt($('minBurnInput').value || '1');
+    if (burnGwei < minBurn) return;
+    if (burnGwei < 1n) { addLog('SKIP burn<1', blockNumber, '0', null, null, 'err'); return; }
+
+    const now = Date.now();
+    recentMints = recentMints.filter(t => now - t < 60_000);
+    const rateLimit = parseInt($('rateLimitInput').value || '6', 10);
+    const sweepActive = $('sweepModeToggle')?.checked;
+    if (!sweepActive && recentMints.length >= rateLimit) {
+      addLog('RATE-LIMIT', blockNumber, burnGwei.toString(), null, `${rateLimit}/min`, 'pend');
+      return;
+    }
+
+    const maxAttempts = parseInt($('maxAttemptsInput').value || '50', 10);
+    if (attempts >= maxAttempts) { stopAuto('attempts cap'); return; }
+    const maxSpend = parseFloat($('maxSpendInput').value || '0.02');
+    if (parseFloat(ethers.formatEther(totalCostWei)) >= maxSpend) { stopAuto('spend cap'); return; }
+
+    recentMints.push(now);
+    mintedThisSession.add(blockNumber);
+    attempts++; updateStats();
+
+    const tick = ($('tickInput').value || 'enat').toLowerCase().trim();
+    const payload = `data:,${JSON.stringify({p:'edmt',op:'emt-mint',tick,blk:String(blockNumber)})}`;
+    const hexData = '0x' + Array.from(new TextEncoder().encode(payload))
+      .map(b => b.toString(16).padStart(2,'0')).join('');
+    const maxFeeWei = ethers.parseUnits($('maxGasInput').value || '20', 'gwei');
+    const priorityWei = ethers.parseUnits($('priorityFeeInput').value || '0.5', 'gwei');
+    const gasLimit = BigInt($('gasLimitInput').value || '60000');
+
+    const t0 = performance.now();
+    const pendRow = addLog(mode === 'hotkey' ? 'BROADCASTING…' : 'SIGNING…', blockNumber, burnGwei.toString(), null, payload.length+'B', 'pend');
+
+    try {
+      const txReq = {
+        to: userAddress, value: 0n, data: hexData,
+        gasLimit, maxFeePerGas: maxFeeWei, maxPriorityFeePerGas: priorityWei, type: 2,
+      };
+      if (mode === 'hotkey' && cachedNonce !== null) {
+        txReq.nonce = cachedNonce;
+        cachedNonce++;
+      }
+      // Sweep mode: enforce 1 tx/sec global cap to avoid RPC/nonce overload
+      if ($('sweepModeToggle')?.checked) await mintThrottle();
+      const tx = await signer.sendTransaction(txReq);
+      const t1 = performance.now();
+      pendRow.querySelector('.status').textContent = 'PENDING';
+      pendRow.querySelector('.status').className = 'status pend';
+      pendRow.children[3].innerHTML =
+        `<a href="https://etherscan.io/tx/${tx.hash}" target="_blank" rel="noopener">${tx.hash.slice(0,10)}…${tx.hash.slice(-6)}</a>`;
+      pendRow.querySelector('.gas').textContent = `+${(t1-t0).toFixed(0)}ms`;
+
+      pushSessionMint({
+        target: blockNumber,
+        burn: burnGwei.toString(),
+        txHash: tx.hash,
+        status: 'pending',
+        time: Date.now(),
+      });
+
+      tx.wait().then(receipt => {
+        if (receipt && receipt.status === 1) {
+          successes++;
+          const cost = receipt.gasUsed * (receipt.gasPrice ?? 0n);
+          totalCostWei += cost;
+          updateStats();
+          pendRow.querySelector('.status').textContent = `INCLUDED #${receipt.blockNumber}`;
+          pendRow.querySelector('.status').className = 'status ok';
+          const ethCost = parseFloat(ethers.formatEther(cost));
+          const usdCost = ethCost * ethPriceUSD;
+          pendRow.querySelector('.gas').textContent = `$${usdCost.toFixed(3)}`;
+          pendRow.querySelector('.gas').title = `${ethCost.toFixed(6)} ETH @ $${ethPriceUSD}`;
+          refreshBalance();
+          scheduleHoldingsRefresh();
+          updateSessionMint(tx.hash, {
+            status: 'mined',
+            costEth: ethCost,
+            costUsd: usdCost,
+            inclusionBlock: receipt.blockNumber,
+          });
+        } else {
+          pendRow.querySelector('.status').textContent = 'REVERTED';
+          pendRow.querySelector('.status').className = 'status err';
+          updateSessionMint(tx.hash, { status: 'reverted' });
+        }
+      }).catch(err => {
+        pendRow.querySelector('.status').textContent = 'DROPPED';
+        pendRow.querySelector('.status').className = 'status err';
+        updateSessionMint(tx.hash, { status: 'dropped', error: err.message });
+      });
+    } catch (err) {
+      pendRow.querySelector('.status').textContent = err.code === 'ACTION_REJECTED' ? 'USER REJECTED' : 'ERROR';
+      pendRow.querySelector('.status').className = 'status err';
+      pendRow.querySelector('.gas').textContent = (err.shortMessage || err.code || '').slice(0,20);
+      attempts--; mintedThisSession.delete(blockNumber); recentMints.pop();
+      if (mode === 'hotkey' && cachedNonce !== null) cachedNonce--;
+      if (mode === 'hotkey' && err.message?.toLowerCase().includes('nonce')) {
+        provider.getTransactionCount(userAddress, 'pending').then(n => { cachedNonce = n; });
+      }
+      pushSessionMint({
+        target: blockNumber,
+        burn: burnGwei.toString(),
+        txHash: null,
+        status: err.code === 'ACTION_REJECTED' ? 'rejected' : 'error',
+        error: err.shortMessage || err.code || err.message,
+        time: Date.now(),
+      });
+      updateStats();
+    }
+  }
+
+  async function manualMint() {
+    if (!signer) { alert('请先连接钱包'); return; }
+    const head = await provider.getBlockNumber();
+    const offset = parseInt($('offsetInput').value || '0', 10);
+    const target = head + offset;
+    const blk = await provider.getBlock(target);
+    if (!blk) { alert('无法取到目标块 ' + target); return; }
+    const burn = (blk.baseFeePerGas * blk.gasUsed) / 1_000_000_000n;
+    mintedThisSession.delete(target);
+    await tryMint(target, burn);
+  }
+
+  function setAuto(on, reason = '') {
+    autoMint = on;
+    $('autoSwitch').classList.toggle('on', on);
+    $('autoStatusTxt').textContent = on ? 'ON' : 'OFF';
+    $('stopBtn').disabled = !on;
+    if (on) {
+      addLog('AUTO ON · ' + (mode === 'hotkey' ? 'RACING' : 'MM'), null, null, null, '—', 'ok');
+      // If sweep mode, kick off the sweeper
+      if ($('sweepModeToggle').checked) startSweep();
+    } else {
+      addLog('AUTO OFF' + (reason ? ' · '+reason : ''), null, null, null, '—', 'err');
+      stopSweep();
+    }
+  }
+  const stopAuto = (reason) => setAuto(false, reason);
+
+  // ============ Sweep mode · 横扫指定块号区段 ============
+  let sweepRunning = false;
+  let sweepQueue = [];
+  let sweepActive = 0;
+  let sweepStats = { total: 0, done: 0, attempted: 0 };
+  let sweepErrorCount = 0;
+  let sweepRetried = new Set();
+
+  async function startSweep() {
+    const from = parseInt($('sweepFromInput').value, 10);
+    const to = parseInt($('sweepToInput').value, 10);
+    const dir = $('sweepDirInput').value;
+    const concurrency = Math.max(1, Math.min(10, parseInt($('sweepConcurrencyInput').value, 10) || 3));
+
+    if (!from || !to || isNaN(from) || isNaN(to)) {
+      alert('请填入 sweep 起始/结束块号'); stopAuto('sweep 参数缺失'); return;
+    }
+    if (from < 12965000 || to < 12965000) {
+      alert('块号必须 ≥ 12,965,000 (EIP-1559 激活块)'); stopAuto('块号无效'); return;
+    }
+
+    // Build queue
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    sweepQueue = [];
+    for (let b = lo; b <= hi; b++) {
+      if (!mintedThisSession.has(b)) sweepQueue.push(b);
+    }
+    if (dir === 'desc') sweepQueue.reverse();
+    else if (dir === 'random') {
+      for (let i = sweepQueue.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [sweepQueue[i], sweepQueue[j]] = [sweepQueue[j], sweepQueue[i]];
+      }
+    }
+
+    sweepRunning = true;
+    sweepActive = 0;
+    sweepErrorCount = 0;
+    sweepRetried = new Set();
+    sweepStats = { total: sweepQueue.length, done: 0, attempted: 0 };
+    $('sweepProgress').style.display = 'block';
+    updateSweepProgress();
+    addLog(`SWEEP START · ${sweepQueue.length} 块 · ${dir}`, null, null, null, `→ ${concurrency} 并发`, 'ok');
+
+    // Launch workers
+    for (let i = 0; i < concurrency; i++) sweepWorker();
+  }
+
+  function stopSweep() {
+    sweepRunning = false;
+    sweepQueue = [];
+    $('sweepProgress').style.display = 'none';
+  }
+
+  function updateSweepProgress() {
+    const pct = sweepStats.total ? ((sweepStats.done / sweepStats.total) * 100).toFixed(1) : '0';
+    $('sweepProgressText').innerHTML =
+      `SWEEP · 进度 <b>${sweepStats.done}/${sweepStats.total}</b> (${pct}%) · 剩 ${sweepQueue.length} · 在飞 ${sweepActive} · 已发 ${sweepStats.attempted}`;
+  }
+
+  async function sweepWorker() {
+    while (sweepRunning) {
+      if (sweepQueue.length === 0) {
+        if (sweepActive === 0) {
+          addLog('SWEEP DONE · 整段扫完', null, null, null, '✓', 'ok');
+          stopAuto('sweep 完成');
+        }
+        return;
+      }
+      // Cost cap check
+      const maxSpendEth = parseFloat($('maxSpendInput').value || '0');
+      const spentEth = parseFloat(ethers.formatEther(totalCostWei));
+      if (maxSpendEth > 0 && spentEth >= maxSpendEth) {
+        addLog('SWEEP STOP · 达到 spend cap', null, null, null, `$${(spentEth*ethPriceUSD).toFixed(2)}`, 'err');
+        stopAuto('达到 spend cap'); return;
+      }
+      const maxAttempts = parseInt($('maxAttemptsInput').value || '0', 10);
+      if (maxAttempts > 0 && sweepStats.attempted >= maxAttempts) {
+        addLog('SWEEP STOP · 达到 attempts cap', null, null, null, `${sweepStats.attempted} 笔`, 'err');
+        stopAuto('达到 attempts cap'); return;
+      }
+
+      const blk = sweepQueue.shift();
+      sweepActive++;
+      sweepStats.attempted++;
+      updateSweepProgress();
+
+      try {
+        // Fetch block burn - fast path, no retry on null (probably archive miss)
+        let blockData = null;
+        try {
+          blockData = await provider.getBlock(blk);
+        } catch(e) {
+          // Network/timeout error → 1 retry after 800ms
+          await new Promise(r => setTimeout(r, 800));
+          try { blockData = await provider.getBlock(blk); } catch(e2) {}
+        }
+
+        if (!blockData || !blockData.baseFeePerGas || !blockData.gasUsed) {
+          // Likely archive miss (RPC doesn't have this old block). Skip silently.
+          // Only log every 20th to avoid spam.
+          if (sweepStats.done % 20 === 0) {
+            addLog('SWEEP SKIP · 块无数据 (RPC 无 archive?)', blk, null, null, null, 'err');
+          }
+        } else {
+          const burnGwei = (blockData.baseFeePerGas * blockData.gasUsed) / 1_000_000_000n;
+          const minBurn = BigInt($('minBurnInput').value || '1');
+          if (burnGwei < minBurn) {
+            if (sweepStats.done % 50 === 0) {
+              addLog(`SWEEP SKIP burn<min`, blk, burnGwei.toString(), null, null, 'err');
+            }
+          } else {
+            await tryMint(blk, burnGwei);
+          }
+        }
+        sweepErrorCount = Math.max(0, sweepErrorCount - 1);
+      } catch (e) {
+        sweepErrorCount++;
+        addLog('SWEEP ERR · ' + (e.message || '').slice(0,40), blk, null, null, null, 'err');
+        if (sweepErrorCount > 5) {
+          addLog(`SWEEP BACKOFF · ${sweepErrorCount} 错 · 暂停 5 秒`, null, null, null, '⏸', 'pend');
+          await new Promise(r => setTimeout(r, 5000));
+          if (sweepErrorCount > 20) {
+            addLog('SWEEP STOP · 错误太多 · 自动停止', null, null, null, '⛔', 'err');
+            stopAuto('错误太多自动停止');
+            sweepActive--;
+            return;
+          }
+        }
+      }
+
+      sweepStats.done++;
+      sweepActive--;
+      updateSweepProgress();
+
+      // Adaptive recovery delay if errors piling up
+      if (sweepErrorCount > 2) {
+        await new Promise(r => setTimeout(r, sweepErrorCount * 300));
+      }
+    }
+  }
+
+  // Global throttle: cap mint rate to N tx/sec regardless of concurrency.
+  // This prevents bursts that overwhelm RPC / cause nonce races.
+  let lastMintSentAt = 0;
+  async function mintThrottle() {
+    const targetGapMs = 1000;   // 1 tx/sec hard cap
+    const now = Date.now();
+    const wait = lastMintSentAt + targetGapMs - now;
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastMintSentAt = Math.max(lastMintSentAt + targetGapMs, Date.now());
+  }
+
+  // Wire up sweep mode toggle
+  $('sweepModeToggle').addEventListener('change', e => {
+    $('sweepFields').style.opacity = e.target.checked ? '1' : '0.4';
+    $('sweepFields').style.pointerEvents = e.target.checked ? 'auto' : 'none';
+  });
+
+  // ============ Holdings · edmt.io profile via CORS proxy ============
+  function updateProfileLink() {
+    if (!userAddress) return;
+    $('profileLink').href = `https://www.edmt.io/en/profile/${userAddress}`;
+  }
+
+  // Auto-fetch edmt.io holdings after connect (session mints are tracked in-memory automatically)
+  async function autoFetchAfterConnect() {
+    setTimeout(() => fetchHoldings(), 800);
+    if ($('etherscanKey').value.trim()) {
+      setTimeout(() => fetchSubmitted(), 1600);
+    }
+  }
+
+  // Debounced refresh after each successful mint (max once per 45s)
+  let pendingRefreshTimer = null;
+  function scheduleHoldingsRefresh() {
+    if (pendingRefreshTimer) return;          // already queued
+    pendingRefreshTimer = setTimeout(() => {
+      pendingRefreshTimer = null;
+      fetchHoldings();
+      if ($('etherscanKey').value.trim()) fetchSubmitted();
+    }, 45_000);                               // 45s wait — give edmt.io indexer time
+  }
+
+  async function fetchHoldings() {
+    if (!userAddress) { alert('请先连接钱包'); return; }
+    const btn = $('fetchHoldingsBtn');
+    btn.disabled = true; btn.textContent = '...';
+    try {
+      const url = `https://www.edmt.io/en/profile/${userAddress.toLowerCase()}`;
+      let html = null;
+      let lastErr = null;
+      const proxies = [
+        'https://corsproxy.io/?url=' + encodeURIComponent(url),
+        'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+        'https://proxy.killcors.com/?url=' + encodeURIComponent(url),
+        'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
+        'https://corsproxy.org/?url=' + encodeURIComponent(url),
+      ];
+      for (const p of proxies) {
+        try {
+          const resp = await fetch(p, { method: 'GET', signal: AbortSignal.timeout(8000) });
+          if (resp.ok) {
+            const txt = await resp.text();
+            if (txt && txt.length > 1000) {  // sanity check — real profile pages are large
+              html = txt;
+              break;
+            }
+          }
+          lastErr = `${new URL(p).hostname} → HTTP ${resp.status}`;
+        } catch(e) { lastErr = e.message?.slice(0, 40); }
+      }
+      if (!html) throw new Error(lastErr || 'all proxies failed');
+
+      const wholesMatch = html.match(/Whole eNATs[\s\S]{0,200}?(\d+(?:,\d{3})*)\s*pcs/i);
+      const burnMatch = html.match(/Held burn[\s\S]{0,300}?([\d,]+(?:\.\d+)?)\s*ETH/i);
+      const fragMatch = html.match(/Fragment balance[\s\S]{0,200}?([\d,]+)\s*gwei/i);
+
+      const wholes = wholesMatch ? wholesMatch[1].replace(/,/g,'') : null;
+      const burn = burnMatch ? burnMatch[1].replace(/,/g,'') : null;
+      const frag = fragMatch ? fragMatch[1].replace(/,/g,'') : null;
+
+      $('confirmedWholes').textContent = wholes ?? '0';
+      $('confirmedBurn').textContent = burn ? burn + ' ETH' : '0';
+      $('confirmedFrag').textContent = frag ? Number(frag).toLocaleString() + ' gwei' : '0';
+      $('holdingsRefreshTime').textContent = 'updated · ' + nowStamp();
+    } catch (err) {
+      console.error(err);
+      // All proxies failed — fall back to manual input
+      $('confirmedWholes').innerHTML = `<input type="number" id="manualWholes" placeholder="手动填" min="0" style="width:100px; font-family:'JetBrains Mono',monospace; font-size:32px; font-weight:700; padding:2px 6px; border:1px solid var(--accent); background:var(--bg); color:var(--ink);"><button id="manualWholesSave" class="btn tiny" style="margin-left:8px; vertical-align:middle;">保存</button>`;
+      $('confirmedBurn').textContent = '代理全挂 · 从官网截图填';
+      $('confirmedFrag').innerHTML = `<a href="https://www.edmt.io/en/profile/${userAddress}" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:underline dashed;">↗ 打开官网看数字</a>`;
+      $('holdingsRefreshTime').textContent = 'proxy fail · ' + (err.message || '').slice(0, 40);
+      // wire up manual save
+      const saveBtn = document.getElementById('manualWholesSave');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+          const v = document.getElementById('manualWholes').value;
+          const n = parseInt(v);
+          if (isNaN(n) || n < 0) { alert('请填入数字'); return; }
+          $('confirmedWholes').textContent = n;
+          $('confirmedBurn').textContent = '手动填入 · 未验证';
+          $('confirmedFrag').textContent = '—';
+          $('holdingsRefreshTime').textContent = 'manual · ' + nowStamp();
+        });
+      }
+    } finally {
+      btn.disabled = false; btn.textContent = '↻ Refresh';
+    }
+  }
+
+  // ============ Holdings · Etherscan submitted history ============
+  async function fetchSubmitted() {
+    if (!userAddress) { alert('请先连接钱包'); return; }
+    const apiKey = $('etherscanKey').value.trim();
+    const btn = $('fetchSubmittedBtn');
+    btn.disabled = true; btn.textContent = '...';
+    $('mintsList').innerHTML = '<div style="padding:8px;color:var(--muted);">扫描中…</div>';
+
+    try {
+      const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${userAddress}&startblock=0&endblock=99999999&page=1&offset=10000&sort=desc${apiKey ? '&apikey='+apiKey : ''}`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      if (data.status !== '1' && data.message !== 'OK') {
+        if (data.message === 'No transactions found') {
+          $('historyMeta').textContent = '本次 session · Etherscan 无历史';
+          return;
+        }
+        throw new Error(data.message + ': ' + (typeof data.result === 'string' ? data.result : ''));
+      }
+      const txs = data.result || [];
+
+      const dataPrefix = '0x' + Array.from(new TextEncoder().encode('data:,{')).map(b=>b.toString(16).padStart(2,'0')).join('');
+      const lcAddr = userAddress.toLowerCase();
+      let added = 0;
+      const existingHashes = new Set(sessionMints.filter(m => m.txHash).map(m => m.txHash.toLowerCase()));
+
+      for (const tx of txs) {
+        if (tx.from?.toLowerCase() !== lcAddr) continue;
+        if (tx.to?.toLowerCase() !== lcAddr) continue;
+        if (!tx.input || !tx.input.toLowerCase().startsWith(dataPrefix)) continue;
+        if (existingHashes.has(tx.hash.toLowerCase())) continue;       // already in session
+        try {
+          const bytes = tx.input.slice(2).match(/.{2}/g).map(b => parseInt(b,16));
+          const str = new TextDecoder().decode(new Uint8Array(bytes));
+          if (!str.startsWith('data:,')) continue;
+          const obj = JSON.parse(str.slice(6));
+          if (obj.p !== 'edmt' || obj.op !== 'emt-mint') continue;
+          const ethCost = (parseInt(tx.gasUsed) * parseInt(tx.gasPrice)) / 1e18;
+          sessionMints.push({
+            target: obj.blk,
+            burn: '?',
+            txHash: tx.hash,
+            status: tx.isError === '1' ? 'reverted' : 'mined',
+            costEth: ethCost,
+            costUsd: ethCost * ethPriceUSD,
+            inclusionBlock: parseInt(tx.blockNumber),
+            time: parseInt(tx.timeStamp) * 1000,
+            historical: true,
+          });
+          added++;
+        } catch(e) {}
+      }
+
+      // Sort by time desc
+      sessionMints.sort((a, b) => b.time - a.time);
+      renderSession();
+      $('historyMeta').textContent = `${sessionMints.length} 条 (本次 session + ${added} 历史)`;
+    } catch (err) {
+      console.error(err);
+      $('historyMeta').textContent = '扫描失败: ' + err.message + (apiKey ? '' : ' · 建议填 Etherscan key');
+    } finally {
+      btn.disabled = false; btn.textContent = '↻ Scan';
+    }
+  }
+
+  // ============ Presets & cost estimate ============
+  const PRESETS = {
+    cheap:      { offset: 0,     minBurn: 1,        maxFee: 10, priority: 2,    rate: 3, attempts: 10, spend: 0.003,  gas: 35000 },
+    balanced:   { offset: 0,     minBurn: 100000,   maxFee: 30, priority: 7,    rate: 5, attempts: 30, spend: 0.015,  gas: 35000 },
+    aggressive: { offset: 0,     minBurn: 5000000,  maxFee: 80, priority: 18,   rate: 5, attempts: 15, spend: 0.020,  gas: 35000 },
+    historical: { offset: -1000, minBurn: 1000000,  maxFee: 15, priority: 2.5,  rate: 3, attempts: 50, spend: 0.015,  gas: 35000 },
+  };
+
+  let ethPriceUSD = 2330;  // fallback default
+  let baseFeeGwei = 0.2;   // fallback, will be updated from chain
+
+  function applyPreset(name) {
+    const p = PRESETS[name];
+    if (!p) return;
+    $('offsetInput').value = p.offset;
+    $('minBurnInput').value = p.minBurn;
+    $('maxGasInput').value = p.maxFee;
+    $('priorityFeeInput').value = p.priority;
+    $('rateLimitInput').value = p.rate;
+    $('maxAttemptsInput').value = p.attempts;
+    $('maxSpendInput').value = p.spend;
+    $('gasLimitInput').value = p.gas;
+    document.querySelectorAll('.preset-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.preset === name));
+    updateCostEstimate();
+    updateMinBurnDisplay();
+    addLog('PRESET · ' + name.toUpperCase(), null, null, null, `$${estimateCostUSD().toFixed(2)}/笔`, 'ok');
+  }
+
+  function updateMinBurnDisplay() {
+    const v = $('minBurnInput').value;
+    const el = $('minBurnDisplay');
+    if (!v || v === '0') {
+      el.innerHTML = '<span style="color:var(--accent);">⚠ 空 / 0 → 不过滤,所有块都打</span>';
+      return;
+    }
+    let n;
+    try { n = BigInt(v); } catch(e) {
+      el.innerHTML = '<span style="color:var(--accent);">⚠ 无法解析 (含逗号/字母/中文?)→ 默认按 1 处理,不过滤</span>';
+      return;
+    }
+    const eth = Number(n) / 1e9;
+    const usd = eth * ethPriceUSD;
+    // shorthand label
+    let cn = '';
+    if (n >= 100000000n) cn = `≈ ${(Number(n)/1e8).toFixed(1)}亿 gwei`;
+    else if (n >= 10000n) cn = `≈ ${(Number(n)/1e4).toFixed(0)}万 gwei`;
+    const formatted = n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    el.innerHTML = `<span style="color:var(--ok);">✓</span> = ${formatted} gwei ${cn ? '· ' + cn : ''} = ${eth.toFixed(4)} ETH ≈ <b>$${usd.toFixed(2)}</b> / 块`;
+  }
+
+  function estimateCostUSD() {
+    const priority = parseFloat($('priorityFeeInput').value || 0);
+    const gas = parseFloat($('gasLimitInput').value || 35000);
+    // actual gas used ≈ 22000-23000 for self-send + 60B calldata
+    const gasActual = Math.min(gas, 23000);
+    const ethCost = gasActual * (baseFeeGwei + priority) / 1e9;
+    return ethCost * ethPriceUSD;
+  }
+
+  function updateCostEstimate() {
+    const usd = estimateCostUSD();
+    const priority = parseFloat($('priorityFeeInput').value || 0);
+    const maxAttempts = parseInt($('maxAttemptsInput').value || 0);
+    $('costEstimate').textContent = `~$${usd.toFixed(3)} / 笔`;
+    $('costHint').textContent = `priority ${priority} gwei · base ${baseFeeGwei.toFixed(2)} · 总预算约 $${(usd * maxAttempts).toFixed(2)} (${maxAttempts}笔) · ETH=$${ethPriceUSD.toFixed(0)}`;
+  }
+
+  async function fetchEthPrice() {
+    try {
+      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j?.ethereum?.usd) {
+        ethPriceUSD = j.ethereum.usd;
+        updateCostEstimate();
+        updateMinBurnDisplay();
+      }
+    } catch(e) { /* fallback to default */ }
+  }
+
+  // Wire up presets + live cost
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+  });
+  ['priorityFeeInput', 'maxGasInput', 'gasLimitInput', 'maxAttemptsInput'].forEach(id => {
+    $(id).addEventListener('input', () => {
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      updateCostEstimate();
+    });
+  });
+  $('minBurnInput').addEventListener('input', () => {
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+    updateMinBurnDisplay();
+  });
+
+  // Apply default preset on load
+  applyPreset('balanced');
+  fetchEthPrice();
+  setInterval(fetchEthPrice, 5 * 60_000);  // refresh price every 5 min
+  renderSession();   // render empty session state on load
+
+  // ============ Wire up ============
+  $('mmConnectBtn').addEventListener('click', connectMetaMask);
+  $('hkConnectBtn').addEventListener('click', connectHotKey);
+  $('hkDisconnectBtn').addEventListener('click', disconnectHotKey);
+  $('autoSwitch').addEventListener('click', () => {
+    if (!signer) { alert('请先连接钱包'); return; }
+    setAuto(!autoMint);
+  });
+  $('stopBtn').addEventListener('click', () => stopAuto('manual'));
+  $('manualMintBtn').addEventListener('click', manualMint);
+  $('fetchHoldingsBtn').addEventListener('click', fetchHoldings);
+  $('fetchSubmittedBtn').addEventListener('click', fetchSubmitted);
+
+  addLog('INIT', null, null, null, 'awaiting wallet', 'pend');
+})();
+</script>
+</body>
+</html>
