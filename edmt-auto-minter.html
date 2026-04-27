@@ -175,7 +175,7 @@
   <div class="right" id="rightStamp">Ξ MAINNET</div>
 </header>
 <div class="tagline">monitor · race · sign · broadcast — first valid in canonical chain order wins</div>
-<div style="text-align:center; font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--muted); margin-top:-6px; margin-bottom:18px; letter-spacing:0.05em;margin-top: 20px;">
+<div style="text-align:center; font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--muted); margin-top:-6px; margin-bottom:18px; letter-spacing:0.05em;">
   作者 · <a href="https://x.com/opopoponono" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; border-bottom:1px solid var(--accent); padding-bottom:1px;">重本冲 ↗</a>
 </div>
 
@@ -391,6 +391,10 @@
             ✓ 100% 准确 · ✓ 不需要预扫 · ✓ 不需要 API key<br>
             ⚠ 慢一些 · 每个块 +0.5-2 秒 (走 CORS 代理)
           </div>
+          <label style="display:flex; align-items:center; gap:8px; margin-top:8px; padding:6px 8px; background:rgba(255,200,0,0.08); border:1px solid rgba(180,140,0,0.3); font-family:'JetBrains Mono',monospace; font-size:11px; cursor:pointer;">
+            <input type="checkbox" id="strictModeToggle" checked style="width:16px; height:16px;" />
+            <span><b>严格模式</b> (推荐): 任何检查失败都 SKIP, 不 mint · 防止白付 gas</span>
+          </label>
         </div>
 
         <!-- Mode B: Pre-scan blacklist (etherscan-based) -->
@@ -1147,10 +1151,8 @@
       return cached.result;
     }
 
-    // Throttle to avoid hammering CORS proxies
     await checkThrottle();
 
-    // If too many consecutive fails, back off
     if (consecutiveFails > 10) {
       const backoffMs = Math.min(consecutiveFails * 1000, 30000);
       addLog(`CHECK BACKOFF · 代理频繁失败, 等 ${(backoffMs/1000).toFixed(0)}s`, null, null, null, '⏸', 'pend');
@@ -1158,13 +1160,11 @@
     }
 
     const url = `https://www.edmt.io/zh/explore/blk/${blk}`;
-    // Pick proxies smartly - try the one with best success rate first
     const allProxies = [
       { name: 'corsproxy.io', url: 'https://corsproxy.io/?url=' + encodeURIComponent(url) },
       { name: 'allorigins.win', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url) },
       { name: 'codetabs.com', url: 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url) },
     ];
-    // Sort by success rate (highest first)
     const sortedProxies = allProxies.sort((a, b) => {
       const aRate = proxyStats[a.name].success / Math.max(1, proxyStats[a.name].success + proxyStats[a.name].fail);
       const bRate = proxyStats[b.name].success / Math.max(1, proxyStats[b.name].success + proxyStats[b.name].fail);
@@ -1191,27 +1191,27 @@
     }
     if (!html) {
       consecutiveFails++;
-      checkCache.set(blk, { result: null, time: Date.now() });
-      return null;
+      // Return 'unknown' - caller decides what to do (strict mode = skip, lax = mint anyway)
+      checkCache.set(blk, { result: 'unknown', time: Date.now() });
+      return 'unknown';
     }
 
-    // Parse the embedded JSON: page has indexer state in JSON code block
     let result = null;
 
-    // Method 1: Look for "minted_by" field (most reliable)
+    // Method 1: Look for "minted_by" field
     const mintedByMatch = html.match(/"minted_by"\s*:\s*("0x[a-fA-F0-9]{40}"|null)/);
     if (mintedByMatch) {
       const mintedBy = mintedByMatch[1];
       if (mintedBy === 'null') {
-        result = false;   // not yet minted ✓ mintable!
+        result = false;
       } else {
         const addr = mintedBy.replace(/"/g, '').toLowerCase();
         if (addr === userAddress?.toLowerCase()) {
-          result = false;   // I minted - shouldn't happen if mintedThisSession working
+          result = false;
         } else if (addr === '0x0000000000000000000000000000000000000000') {
           result = false;
         } else {
-          result = true;   // minted by someone else ✗
+          result = true;
         }
       }
     }
@@ -1225,7 +1225,11 @@
       }
     }
 
-    if (result === null) result = false;   // fail-open: assume mintable
+    // Couldn't determine - return 'unknown' to let caller decide
+    if (result === null) {
+      checkCache.set(blk, { result: 'unknown', time: Date.now() });
+      return 'unknown';
+    }
 
     checkCache.set(blk, { result, time: Date.now() });
 
@@ -1350,16 +1354,34 @@
           } else {
             // Filter 4: realtime edmt.io check (only run on blocks that passed minburn)
             if ($('realtimeCheckToggle').checked) {
-              const isMinted = await checkBlockMintedOnEdmt(blk);
-              if (isMinted === true) {
+              const checkResult = await checkBlockMintedOnEdmt(blk);
+              if (checkResult === true) {
+                // Confirmed already minted by others
                 mintedBlocksByOthers.add(blk);
-                addLog('SKIP · 实时查 edmt.io 已 mint', blk, burnGwei.toString(), null, null, 'pend');
+                addLog('SKIP · 已 mint', blk, burnGwei.toString(), null, null, 'pend');
                 sweepStats.done++;
                 sweepActive--;
                 updateSweepProgress();
                 continue;
               }
-              // null = check failed, fail-open and proceed
+              if (checkResult === 'unknown') {
+                // Check failed - in strict mode, skip; in lax mode, proceed
+                if ($('strictModeToggle').checked) {
+                  addLog('SKIP · 严格模式 · 检查失败不 mint', blk, burnGwei.toString(), null, null, 'err');
+                  sweepStats.done++;
+                  sweepActive--;
+                  updateSweepProgress();
+                  // Push back to queue for retry later (within same sweep)
+                  if (!sweepRetried.has(blk)) {
+                    sweepRetried.add(blk);
+                    sweepQueue.push(blk);
+                  }
+                  continue;
+                }
+                // lax mode: proceed despite failure
+                addLog('⚠ 检查失败但仍 mint (非严格)', blk, burnGwei.toString(), null, null, 'err');
+              }
+              // checkResult === false → confirmed mintable, proceed
             }
             // Passed all filters → mint
             sweepStats.attempted++;
