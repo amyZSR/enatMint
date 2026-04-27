@@ -175,6 +175,9 @@
   <div class="right" id="rightStamp">Ξ MAINNET</div>
 </header>
 <div class="tagline">monitor · race · sign · broadcast — first valid in canonical chain order wins</div>
+<div style="text-align:center; font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--muted); margin-top:-6px; margin-bottom:18px; letter-spacing:0.05em;margin-top: 20px;">
+  作者 · <a href="https://x.com/opopoponono" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; border-bottom:1px solid var(--accent); padding-bottom:1px;">重本冲 ↗</a>
+</div>
 
 <!-- Plate 0 -->
 <div class="plate">
@@ -369,6 +372,49 @@
       </div>
       <div id="sweepProgress" style="margin-top:10px; padding:8px 12px; background:var(--bg); border:1px solid var(--line); font-family:'JetBrains Mono',monospace; font-size:11px; display:none;">
         <span id="sweepProgressText">—</span>
+      </div>
+
+      <!-- Realtime check + Predscan blacklist (skip blocks already minted by others) -->
+      <div style="margin-top:14px; padding:10px 12px; background:var(--bg); border:1px solid var(--line);">
+        <div style="margin-bottom:8px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700;">
+          🛡️ 已 mint 块过滤 / Already-minted filter
+        </div>
+
+        <!-- Mode A: Realtime check via edmt.io -->
+        <div style="margin-bottom:10px; padding:8px 10px; border-left:3px solid var(--ok); background:rgba(0,128,0,0.04);">
+          <label style="display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono',monospace; font-size:11px; cursor:pointer; font-weight:700;">
+            <input type="checkbox" id="realtimeCheckToggle" style="width:16px; height:16px;" />
+            <span>实时查 edmt.io · 推荐 ⭐</span>
+          </label>
+          <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+            扫到一个块时, 先访问 edmt.io 查这个块是否已被 mint (有 owner)。<br>
+            ✓ 100% 准确 · ✓ 不需要预扫 · ✓ 不需要 API key<br>
+            ⚠ 慢一些 · 每个块 +0.5-2 秒 (走 CORS 代理)
+          </div>
+        </div>
+
+        <!-- Mode B: Pre-scan blacklist (etherscan-based) -->
+        <div style="padding:8px 10px; border-left:3px solid var(--muted);">
+          <label style="display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono',monospace; font-size:11px; cursor:pointer; font-weight:700;">
+            <input type="checkbox" id="blacklistToggle" style="width:16px; height:16px;" />
+            <span>使用预扫黑名单</span>
+          </label>
+          <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+            提前从 leaderboard 扫好, 跑 sweep 时 O(1) 检查无延迟。需要 Etherscan API key。
+          </div>
+          <div id="blacklistStatus" style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--muted); margin-top:4px;">未同步 · 黑名单为空</div>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px;">
+            <button class="btn tiny blacklist-preset" data-n="30">⚡ top 30</button>
+            <button class="btn tiny blacklist-preset" data-n="100">🎯 top 100</button>
+            <button class="btn tiny blacklist-preset" data-n="500">🔬 top 500</button>
+            <input id="blacklistTopN" type="number" value="30" min="5" max="10000" style="width:70px; padding:3px 6px; border:1px solid var(--line); background:var(--bg); font-family:'JetBrains Mono',monospace; font-size:10px;" />
+            <button id="syncBlacklistBtn" class="btn tiny">↻ 同步</button>
+          </div>
+        </div>
+
+        <div style="font-size:10px; color:var(--muted); margin-top:8px; padding-top:6px; border-top:1px dashed var(--line);">
+          💡 <b>建议</b>: 两个都勾上。预扫黑名单先 O(1) 跳过明显已 mint 的, 实时查 edmt.io 兜底剩下的边缘情况。
+        </div>
       </div>
     </div>
 
@@ -902,6 +948,293 @@
   let sweepErrorCount = 0;
   let sweepRetried = new Set();
 
+  // ============ Blacklist · 别人已 mint 的块跳过 ============
+  let mintedBlocksByOthers = new Set();
+
+  // Restore blacklist from localStorage on load (persists across browser sessions)
+  try {
+    const stored = localStorage.getItem('edmt_blacklist');
+    const meta = localStorage.getItem('edmt_blacklist_meta');
+    if (stored) {
+      mintedBlocksByOthers = new Set(JSON.parse(stored).map(n => Number(n)));
+      if (meta) {
+        const m = JSON.parse(meta);
+        setTimeout(() => {
+          if ($('blacklistStatus')) {
+            $('blacklistStatus').textContent = `已加载 · ${mintedBlocksByOthers.size.toLocaleString()} 块 · ${m.time}`;
+          }
+        }, 100);
+      }
+    }
+  } catch(e) { console.warn('blacklist restore failed:', e); }
+
+  async function syncBlacklist() {
+    const apiKey = $('etherscanKey').value.trim();
+    if (!apiKey) {
+      alert('请先在 Plate IV 右卡填 Etherscan API key (免费申请: etherscan.io/myapikey)');
+      return;
+    }
+    const topN = Math.max(5, Math.min(10000, parseInt($('blacklistTopN').value, 10) || 30));
+    const fullSync = topN >= 1000;
+    if (fullSync) {
+      const ok = confirm(`全量同步将抓取 leaderboard 所有 ${topN} 名持有人 (共 6,790 人左右),约需 ${Math.round(topN/60)}-${Math.round(topN/30)} 分钟。\n\n确定继续吗?`);
+      if (!ok) return;
+    }
+    const btn = $('syncBlacklistBtn');
+    btn.disabled = true; btn.textContent = '...';
+    const statusEl = $('blacklistStatus');
+    statusEl.textContent = '同步中…';
+
+    try {
+      // Step 1: Fetch leaderboard pages (paginated)
+      statusEl.textContent = `[1/3] 拉取 leaderboard 前 ${topN} 名…`;
+      const allAddresses = [];
+      const seenAddrs = new Set();
+      const PAGE_SIZE = 100;   // edmt.io shows ~100 per page typically
+      const totalPages = Math.ceil(topN / PAGE_SIZE);
+
+      for (let pg = 1; pg <= totalPages; pg++) {
+        const url = `https://www.edmt.io/en/leaderboard?page=${pg}`;
+        statusEl.textContent = `[1/3] leaderboard 页 ${pg}/${totalPages} (累计 ${allAddresses.length} 地址)`;
+        let html = null;
+        const proxies = [
+          'https://corsproxy.io/?url=' + encodeURIComponent(url),
+          'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+          'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
+          'https://corsproxy.org/?url=' + encodeURIComponent(url),
+        ];
+        for (const p of proxies) {
+          try {
+            const r = await fetch(p, { signal: AbortSignal.timeout(15000) });
+            if (r.ok) {
+              const t = await r.text();
+              if (t && t.length > 5000) { html = t; break; }
+            }
+          } catch(e) {}
+        }
+        if (!html) {
+          if (pg === 1) throw new Error('leaderboard 拉取失败 (代理全挂)');
+          break;   // partial fetch is OK for later pages
+        }
+
+        const addrMatches = html.match(/0x[a-fA-F0-9]{40}/g) || [];
+        let pageAdded = 0;
+        for (const a of addrMatches) {
+          const lc = a.toLowerCase();
+          if (!seenAddrs.has(lc) && lc !== '0x0000000000000000000000000000000000000000') {
+            seenAddrs.add(lc);
+            allAddresses.push(lc);
+            pageAdded++;
+            if (allAddresses.length >= topN) break;
+          }
+        }
+        if (pageAdded === 0) break;   // no new addresses on this page = end of list
+        if (allAddresses.length >= topN) break;
+        await new Promise(r => setTimeout(r, 300));   // be nice to proxies
+      }
+
+      if (allAddresses.length === 0) throw new Error('未从 leaderboard 提取到地址');
+      statusEl.textContent = `[1/3] 提取 ${allAddresses.length} 地址 ✓`;
+
+      // Step 2: For each address, fetch all txs from etherscan and parse mint blk numbers
+      const newBlacklist = new Set(mintedBlocksByOthers);
+      const dataPrefix = '0x' + Array.from(new TextEncoder().encode('data:,{')).map(b=>b.toString(16).padStart(2,'0')).join('');
+      let processedAddrs = 0;
+      let totalNewBlocks = 0;
+      const startTs = Date.now();
+
+      for (const addr of allAddresses) {
+        const elapsed = Math.round((Date.now() - startTs) / 1000);
+        const eta = processedAddrs > 0 ? Math.round((elapsed / processedAddrs) * (allAddresses.length - processedAddrs)) : 0;
+        statusEl.textContent = `[2/3] 扫地址 ${processedAddrs+1}/${allAddresses.length} · 黑名单 ${newBlacklist.size.toLocaleString()} · 已用 ${elapsed}s · 剩约 ${eta}s`;
+
+        try {
+          const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=99999999&page=1&offset=10000&sort=desc&apikey=${apiKey}`;
+          const resp = await fetch(url);
+          const data = await resp.json();
+          if (data.status === '1' || data.message === 'OK') {
+            const txs = data.result || [];
+            for (const tx of txs) {
+              if (tx.from?.toLowerCase() !== addr) continue;
+              if (tx.to?.toLowerCase() !== addr) continue;
+              if (!tx.input || !tx.input.toLowerCase().startsWith(dataPrefix)) continue;
+              try {
+                const bytes = tx.input.slice(2).match(/.{2}/g).map(b => parseInt(b,16));
+                const str = new TextDecoder().decode(new Uint8Array(bytes));
+                if (!str.startsWith('data:,')) continue;
+                const obj = JSON.parse(str.slice(6));
+                if (obj.p !== 'edmt' || obj.op !== 'emt-mint') continue;
+                const blk = parseInt(obj.blk, 10);
+                if (blk && !isNaN(blk)) {
+                  if (!newBlacklist.has(blk)) totalNewBlocks++;
+                  newBlacklist.add(blk);
+                }
+              } catch(e) {}
+            }
+          }
+        } catch(e) { console.warn('addr scan failed:', addr, e); }
+        processedAddrs++;
+        // Etherscan free: 5 req/sec, 250ms = 4 req/sec safe margin
+        await new Promise(r => setTimeout(r, 250));
+      }
+
+      // Step 3: Persist (with chunking for large blacklists)
+      statusEl.textContent = `[3/3] 保存中 (${newBlacklist.size.toLocaleString()} 块)…`;
+      mintedBlocksByOthers = newBlacklist;
+      try {
+        const blockArr = Array.from(newBlacklist);
+        localStorage.setItem('edmt_blacklist', JSON.stringify(blockArr));
+        localStorage.setItem('edmt_blacklist_meta', JSON.stringify({
+          time: nowStamp(),
+          addrCount: allAddresses.length,
+          blockCount: newBlacklist.size,
+          newAdded: totalNewBlocks
+        }));
+      } catch(e) {
+        console.warn('localStorage save failed (try IndexedDB?):', e);
+        statusEl.innerHTML = `<span style="color:var(--accent);">⚠ 黑名单太大无法持久化, 但当前 session 内仍生效</span>`;
+      }
+
+      const totalSec = Math.round((Date.now() - startTs) / 1000);
+      const finalMsg = `✓ 黑名单 ${newBlacklist.size.toLocaleString()} 块 (新增 +${totalNewBlocks.toLocaleString()}) · ${allAddresses.length} 地址 · ${totalSec}s`;
+      statusEl.textContent = finalMsg;
+      addLog('BLACKLIST 同步完成 · ' + newBlacklist.size.toLocaleString() + ' 块', null, null, null, '+' + totalNewBlocks, 'ok');
+    } catch(err) {
+      console.error(err);
+      statusEl.innerHTML = `<span style="color:var(--accent);">⚠ 同步失败: ${(err.message || '').slice(0,60)}</span>`;
+      addLog('BLACKLIST 同步失败: ' + (err.message || '').slice(0,40), null, null, null, '✗', 'err');
+    } finally {
+      btn.disabled = false; btn.textContent = '↻ 同步黑名单';
+    }
+  }
+
+  $('syncBlacklistBtn').addEventListener('click', syncBlacklist);
+  document.querySelectorAll('.blacklist-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const n = parseInt(btn.dataset.n, 10);
+      $('blacklistTopN').value = n;
+      syncBlacklist();
+    });
+  });
+
+  // ============ Realtime block check via edmt.io ============
+  // Check if a specific block has been minted by parsing the JSON embedded in
+  // edmt.io's explore page. Returns: true (already minted), false (mintable!), null (check failed)
+  const checkCache = new Map();
+  const CHECK_CACHE_TTL = 120_000; // 2 min: don't recheck same block within 2 min
+
+  // Global throttle for edmt.io requests to avoid CORS proxy rate-limit
+  let lastCheckAt = 0;
+  const CHECK_GAP_MS = 600;  // max ~1.6 checks/sec - well under any free proxy limit
+  async function checkThrottle() {
+    const now = Date.now();
+    const wait = lastCheckAt + CHECK_GAP_MS - now;
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastCheckAt = Math.max(lastCheckAt + CHECK_GAP_MS, Date.now());
+  }
+
+  // Track proxy success/failure for adaptive selection
+  const proxyStats = {
+    'corsproxy.io': { success: 0, fail: 0 },
+    'allorigins.win': { success: 0, fail: 0 },
+    'codetabs.com': { success: 0, fail: 0 },
+  };
+  let consecutiveFails = 0;
+
+  async function checkBlockMintedOnEdmt(blk) {
+    const cached = checkCache.get(blk);
+    if (cached && (Date.now() - cached.time < CHECK_CACHE_TTL)) {
+      return cached.result;
+    }
+
+    // Throttle to avoid hammering CORS proxies
+    await checkThrottle();
+
+    // If too many consecutive fails, back off
+    if (consecutiveFails > 10) {
+      const backoffMs = Math.min(consecutiveFails * 1000, 30000);
+      addLog(`CHECK BACKOFF · 代理频繁失败, 等 ${(backoffMs/1000).toFixed(0)}s`, null, null, null, '⏸', 'pend');
+      await new Promise(r => setTimeout(r, backoffMs));
+    }
+
+    const url = `https://www.edmt.io/zh/explore/blk/${blk}`;
+    // Pick proxies smartly - try the one with best success rate first
+    const allProxies = [
+      { name: 'corsproxy.io', url: 'https://corsproxy.io/?url=' + encodeURIComponent(url) },
+      { name: 'allorigins.win', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url) },
+      { name: 'codetabs.com', url: 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url) },
+    ];
+    // Sort by success rate (highest first)
+    const sortedProxies = allProxies.sort((a, b) => {
+      const aRate = proxyStats[a.name].success / Math.max(1, proxyStats[a.name].success + proxyStats[a.name].fail);
+      const bRate = proxyStats[b.name].success / Math.max(1, proxyStats[b.name].success + proxyStats[b.name].fail);
+      return bRate - aRate;
+    });
+
+    let html = null;
+    for (const p of sortedProxies) {
+      try {
+        const r = await fetch(p.url, { signal: AbortSignal.timeout(6000) });
+        if (r.ok) {
+          const t = await r.text();
+          if (t && t.length > 1000) {
+            html = t;
+            proxyStats[p.name].success++;
+            consecutiveFails = 0;
+            break;
+          }
+        }
+        proxyStats[p.name].fail++;
+      } catch(e) {
+        proxyStats[p.name].fail++;
+      }
+    }
+    if (!html) {
+      consecutiveFails++;
+      checkCache.set(blk, { result: null, time: Date.now() });
+      return null;
+    }
+
+    // Parse the embedded JSON: page has indexer state in JSON code block
+    let result = null;
+
+    // Method 1: Look for "minted_by" field (most reliable)
+    const mintedByMatch = html.match(/"minted_by"\s*:\s*("0x[a-fA-F0-9]{40}"|null)/);
+    if (mintedByMatch) {
+      const mintedBy = mintedByMatch[1];
+      if (mintedBy === 'null') {
+        result = false;   // not yet minted ✓ mintable!
+      } else {
+        const addr = mintedBy.replace(/"/g, '').toLowerCase();
+        if (addr === userAddress?.toLowerCase()) {
+          result = false;   // I minted - shouldn't happen if mintedThisSession working
+        } else if (addr === '0x0000000000000000000000000000000000000000') {
+          result = false;
+        } else {
+          result = true;   // minted by someone else ✗
+        }
+      }
+    }
+
+    // Method 2 fallback: Chinese page status text
+    if (result === null) {
+      if (html.includes('已铸造') || html.includes('已mint')) {
+        result = true;
+      } else if (html.includes('可铸造') || html.includes('未铸造') || html.includes('mintable')) {
+        result = false;
+      }
+    }
+
+    if (result === null) result = false;   // fail-open: assume mintable
+
+    checkCache.set(blk, { result, time: Date.now() });
+
+    if (result === true) {
+      mintedBlocksByOthers.add(blk);
+    }
+    return result;
+  }
+
   async function startSweep() {
     const from = parseInt($('sweepFromInput').value, 10);
     const to = parseInt($('sweepToInput').value, 10);
@@ -977,35 +1310,59 @@
       }
 
       const blk = sweepQueue.shift();
+
+      // Filter 1: O(1) blacklist check (predscan, 免费)
+      if ($('blacklistToggle').checked && mintedBlocksByOthers.has(blk)) {
+        sweepStats.done++;
+        if (sweepStats.done % 100 === 0) {
+          addLog('SKIP · 黑名单 (预扫)', blk, null, null, null, 'pend');
+        }
+        updateSweepProgress();
+        continue;
+      }
+
       sweepActive++;
-      sweepStats.attempted++;
       updateSweepProgress();
 
       try {
-        // Fetch block burn - fast path, no retry on null (probably archive miss)
+        // Filter 2: Fetch block burn first (cheaper than edmt.io check)
         let blockData = null;
         try {
           blockData = await provider.getBlock(blk);
         } catch(e) {
-          // Network/timeout error → 1 retry after 800ms
           await new Promise(r => setTimeout(r, 800));
           try { blockData = await provider.getBlock(blk); } catch(e2) {}
         }
 
         if (!blockData || !blockData.baseFeePerGas || !blockData.gasUsed) {
-          // Likely archive miss (RPC doesn't have this old block). Skip silently.
-          // Only log every 20th to avoid spam.
           if (sweepStats.done % 20 === 0) {
             addLog('SWEEP SKIP · 块无数据 (RPC 无 archive?)', blk, null, null, null, 'err');
           }
         } else {
           const burnGwei = (blockData.baseFeePerGas * blockData.gasUsed) / 1_000_000_000n;
           const minBurn = BigInt($('minBurnInput').value || '1');
+
+          // Filter 3: min burn check (cheap, before expensive edmt.io check)
           if (burnGwei < minBurn) {
             if (sweepStats.done % 50 === 0) {
               addLog(`SWEEP SKIP burn<min`, blk, burnGwei.toString(), null, null, 'err');
             }
           } else {
+            // Filter 4: realtime edmt.io check (only run on blocks that passed minburn)
+            if ($('realtimeCheckToggle').checked) {
+              const isMinted = await checkBlockMintedOnEdmt(blk);
+              if (isMinted === true) {
+                mintedBlocksByOthers.add(blk);
+                addLog('SKIP · 实时查 edmt.io 已 mint', blk, burnGwei.toString(), null, null, 'pend');
+                sweepStats.done++;
+                sweepActive--;
+                updateSweepProgress();
+                continue;
+              }
+              // null = check failed, fail-open and proceed
+            }
+            // Passed all filters → mint
+            sweepStats.attempted++;
             await tryMint(blk, burnGwei);
           }
         }
@@ -1029,7 +1386,6 @@
       sweepActive--;
       updateSweepProgress();
 
-      // Adaptive recovery delay if errors piling up
       if (sweepErrorCount > 2) {
         await new Promise(r => setTimeout(r, sweepErrorCount * 300));
       }
