@@ -175,7 +175,7 @@
   <div class="right" id="rightStamp">Ξ MAINNET</div>
 </header>
 <div class="tagline">monitor · race · sign · broadcast — first valid in canonical chain order wins</div>
-<div style="text-align:center; font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--muted); margin-top:-6px; margin-bottom:18px; letter-spacing:0.05em;">
+<div style="text-align:center; font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--muted); margin-top:-6px; margin-bottom:18px; letter-spacing:0.05em;margin-top: 25px;">
   作者 · <a href="https://x.com/opopoponono" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none; border-bottom:1px solid var(--accent); padding-bottom:1px;">重本冲 ↗</a>
 </div>
 
@@ -332,6 +332,9 @@
       </div>
       <div class="field"><label>Min burn (gwei)</label><input id="minBurnInput" type="number" value="1" min="1" />
         <div class="hint" id="minBurnDisplay">≥ 1 gwei (基本不过滤)</div>
+      </div>
+      <div class="field"><label>Max burn (gwei) · 0=不限</label><input id="maxBurnInput" type="number" value="0" min="0" />
+        <div class="hint" id="maxBurnDisplay">不限上限 · 设>0 跳过超高 burn (大概率已被人占)</div>
       </div>
       <div class="field"><label>Max fee/gas (gwei)</label><input id="maxGasInput" type="number" value="20" /></div>
       <div class="field"><label>Priority fee (gwei)</label><input id="priorityFeeInput" type="number" value="0.5" step="0.1" />
@@ -807,6 +810,11 @@
 
     const minBurn = BigInt($('minBurnInput').value || '1');
     if (burnGwei < minBurn) return;
+    const maxBurnVal = $('maxBurnInput').value;
+    if (maxBurnVal && maxBurnVal !== '0') {
+      const maxBurn = BigInt(maxBurnVal);
+      if (burnGwei > maxBurn) return;
+    }
     if (burnGwei < 1n) { addLog('SKIP burn<1', blockNumber, '0', null, null, 'err'); return; }
 
     const now = Date.now();
@@ -865,7 +873,45 @@
         time: Date.now(),
       });
 
+      // Watchdog: if tx stays pending > 90s, force-check on chain
+      const pendingTimeout = setTimeout(async () => {
+        try {
+          const receipt = await provider.getTransactionReceipt(tx.hash);
+          if (receipt) {
+            // Already mined - tx.wait() callback didn't fire for some reason
+            return;
+          }
+          const txLookup = await provider.getTransaction(tx.hash);
+          if (!txLookup) {
+            // dropped from mempool entirely
+            pendRow.querySelector('.status').textContent = 'DROPPED (timeout)';
+            pendRow.querySelector('.status').className = 'status err';
+            updateSessionMint(tx.hash, { status: 'dropped', error: 'mempool timeout 90s' });
+            // Re-sync nonce after a drop
+            if (mode === 'hotkey') {
+              provider.getTransactionCount(userAddress, 'pending').then(n => { cachedNonce = n; });
+            }
+          }
+          // else: still in mempool, wait normally
+        } catch(e) { /* ignore - tx.wait may resolve later */ }
+      }, 90_000);
+
+      // Hard timeout: 30 min - if still pending after 30 min, just give up tracking
+      const hardTimeout = setTimeout(() => {
+        const entry = sessionMints.find(m => m.txHash === tx.hash);
+        if (entry && entry.status === 'pending') {
+          pendRow.querySelector('.status').textContent = 'STALE (30m)';
+          pendRow.querySelector('.status').className = 'status err';
+          updateSessionMint(tx.hash, { status: 'dropped', error: 'stale 30 min, abandoned' });
+          if (mode === 'hotkey') {
+            provider.getTransactionCount(userAddress, 'pending').then(n => { cachedNonce = n; });
+          }
+        }
+      }, 30 * 60_000);
+
       tx.wait().then(receipt => {
+        clearTimeout(pendingTimeout);
+        clearTimeout(hardTimeout);
         if (receipt && receipt.status === 1) {
           successes++;
           const cost = receipt.gasUsed * (receipt.gasPrice ?? 0n);
@@ -891,9 +937,15 @@
           updateSessionMint(tx.hash, { status: 'reverted' });
         }
       }).catch(err => {
+        clearTimeout(pendingTimeout);
+        clearTimeout(hardTimeout);
         pendRow.querySelector('.status').textContent = 'DROPPED';
         pendRow.querySelector('.status').className = 'status err';
         updateSessionMint(tx.hash, { status: 'dropped', error: err.message });
+        // Re-sync nonce after drop
+        if (mode === 'hotkey') {
+          provider.getTransactionCount(userAddress, 'pending').then(n => { cachedNonce = n; });
+        }
       });
     } catch (err) {
       pendRow.querySelector('.status').textContent = err.code === 'ACTION_REJECTED' ? 'USER REJECTED' : 'ERROR';
@@ -1129,7 +1181,7 @@
 
   // Global throttle for edmt.io requests to avoid CORS proxy rate-limit
   let lastCheckAt = 0;
-  const CHECK_GAP_MS = 600;  // max ~1.6 checks/sec - well under any free proxy limit
+  const CHECK_GAP_MS = 200;  // 200ms = 5 checks/sec, fine for direct API
   async function checkThrottle() {
     const now = Date.now();
     const wait = lastCheckAt + CHECK_GAP_MS - now;
@@ -1140,8 +1192,8 @@
   // Track proxy success/failure for adaptive selection
   const proxyStats = {
     'corsproxy.io': { success: 0, fail: 0 },
-    'allorigins.win': { success: 0, fail: 0 },
-    'codetabs.com': { success: 0, fail: 0 },
+    'cors.lol': { success: 0, fail: 0 },
+    'thingproxy': { success: 0, fail: 0 },
   };
   let consecutiveFails = 0;
 
@@ -1159,49 +1211,85 @@
       await new Promise(r => setTimeout(r, backoffMs));
     }
 
-    const url = `https://www.edmt.io/zh/explore/blk/${blk}`;
-    const allProxies = [
-      { name: 'corsproxy.io', url: 'https://corsproxy.io/?url=' + encodeURIComponent(url) },
-      { name: 'allorigins.win', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url) },
-      { name: 'codetabs.com', url: 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url) },
-    ];
-    const sortedProxies = allProxies.sort((a, b) => {
-      const aRate = proxyStats[a.name].success / Math.max(1, proxyStats[a.name].success + proxyStats[a.name].fail);
-      const bRate = proxyStats[b.name].success / Math.max(1, proxyStats[b.name].success + proxyStats[b.name].fail);
-      return bRate - aRate;
-    });
-
     let html = null;
-    for (const p of sortedProxies) {
-      try {
-        const r = await fetch(p.url, { signal: AbortSignal.timeout(6000) });
-        if (r.ok) {
-          const t = await r.text();
-          if (t && t.length > 1000) {
-            html = t;
-            proxyStats[p.name].success++;
-            consecutiveFails = 0;
-            break;
-          }
+    let usedSource = '';
+    let lastFailReason = '';
+
+    // === Phase 1: Direct edmt.io API (confirmed: api.edmt.io/api/v1/blocks/<blk>) ===
+    try {
+      const ep = `https://api.edmt.io/api/v1/blocks/${blk}`;
+      const r = await fetch(ep, {
+        signal: AbortSignal.timeout(4000),
+        headers: { 'Accept': 'application/json' }
+      });
+      if (r.ok) {
+        const ct = r.headers.get('content-type') || '';
+        if (ct.includes('json')) {
+          html = await r.text();
+          usedSource = 'direct-api';
+          consecutiveFails = 0;
         }
-        proxyStats[p.name].fail++;
-      } catch(e) {
-        proxyStats[p.name].fail++;
+      }
+    } catch(e) { /* fall through to proxy */ }
+
+    // === Phase 2: Fallback to CORS proxy on HTML page ===
+    if (!html) {
+      const url = `https://www.edmt.io/zh/explore/blk/${blk}`;
+      const allProxies = [
+        { name: 'corsproxy.io', url: 'https://corsproxy.io/?url=' + encodeURIComponent(url) },
+        { name: 'cors.lol', url: 'https://api.cors.lol/?url=' + encodeURIComponent(url) },
+        { name: 'thingproxy', url: 'https://thingproxy.freeboard.io/fetch/' + url },
+      ];
+      const sortedProxies = allProxies.sort((a, b) => {
+        const aRate = proxyStats[a.name].success / Math.max(1, proxyStats[a.name].success + proxyStats[a.name].fail);
+        const bRate = proxyStats[b.name].success / Math.max(1, proxyStats[b.name].success + proxyStats[b.name].fail);
+        return bRate - aRate;
+      });
+
+      for (const p of sortedProxies) {
+        try {
+          const r = await fetch(p.url, {
+            signal: AbortSignal.timeout(8000),
+            redirect: 'follow',
+          });
+          if (r.ok) {
+            const t = await r.text();
+            if (t && t.length > 1000) {
+              html = t;
+              usedSource = 'proxy: ' + p.name;
+              proxyStats[p.name].success++;
+              consecutiveFails = 0;
+              break;
+            }
+            lastFailReason = `${p.name} 返回 ${t?.length || 0} 字符 (太短)`;
+          } else {
+            lastFailReason = `${p.name} HTTP ${r.status}`;
+          }
+          proxyStats[p.name].fail++;
+        } catch(e) {
+          lastFailReason = `${p.name} ${(e.message || e.name || 'fetch error').slice(0, 30)}`;
+          proxyStats[p.name].fail++;
+        }
       }
     }
     if (!html) {
       consecutiveFails++;
-      // Return 'unknown' - caller decides what to do (strict mode = skip, lax = mint anyway)
+      // log every 10th to debug without spamming
+      if (consecutiveFails % 10 === 1) {
+        addLog(`CHECK FAIL: ${lastFailReason}`, blk, null, null, null, 'err');
+      }
       checkCache.set(blk, { result: 'unknown', time: Date.now() });
       return 'unknown';
     }
 
     let result = null;
+    let parseSource = '';
 
-    // Method 1: Look for "minted_by" field
+    // Method 1: Look for "minted_by" field (most reliable)
     const mintedByMatch = html.match(/"minted_by"\s*:\s*("0x[a-fA-F0-9]{40}"|null)/);
     if (mintedByMatch) {
       const mintedBy = mintedByMatch[1];
+      parseSource = 'JSON.minted_by';
       if (mintedBy === 'null') {
         result = false;
       } else {
@@ -1220,22 +1308,28 @@
     if (result === null) {
       if (html.includes('已铸造') || html.includes('已mint')) {
         result = true;
-      } else if (html.includes('可铸造') || html.includes('未铸造') || html.includes('mintable')) {
+        parseSource = 'text:已铸造';
+      } else if (html.includes('尚未铸造') || html.includes('可铸造') || html.includes('未铸造') || html.includes('mintable')) {
         result = false;
+        parseSource = 'text:尚未铸造';
       }
     }
 
-    // Couldn't determine - return 'unknown' to let caller decide
     if (result === null) {
+      // Truly couldn't determine - log a sample for debugging
+      const sample = html.indexOf('minted_by') >= 0
+        ? html.substring(html.indexOf('minted_by'), html.indexOf('minted_by') + 80)
+        : `(no 'minted_by' in ${html.length} chars · src: ${usedSource})`;
+      console.warn(`[blk ${blk}] Could not parse:`, sample);
+      if (consecutiveFails % 5 === 0) {
+        addLog(`CHECK PARSE FAIL · ${usedSource} · ${html.length}字符`, blk, null, null, null, 'err');
+      }
       checkCache.set(blk, { result: 'unknown', time: Date.now() });
       return 'unknown';
     }
 
     checkCache.set(blk, { result, time: Date.now() });
-
-    if (result === true) {
-      mintedBlocksByOthers.add(blk);
-    }
+    if (result === true) mintedBlocksByOthers.add(blk);
     return result;
   }
 
@@ -1345,11 +1439,17 @@
         } else {
           const burnGwei = (blockData.baseFeePerGas * blockData.gasUsed) / 1_000_000_000n;
           const minBurn = BigInt($('minBurnInput').value || '1');
+          const maxBurnVal = $('maxBurnInput').value;
+          const maxBurn = (maxBurnVal && maxBurnVal !== '0') ? BigInt(maxBurnVal) : null;
 
-          // Filter 3: min burn check (cheap, before expensive edmt.io check)
+          // Filter 3: burn range check (cheap, before expensive edmt.io check)
           if (burnGwei < minBurn) {
             if (sweepStats.done % 50 === 0) {
               addLog(`SWEEP SKIP burn<min`, blk, burnGwei.toString(), null, null, 'err');
+            }
+          } else if (maxBurn !== null && burnGwei > maxBurn) {
+            if (sweepStats.done % 50 === 0) {
+              addLog(`SWEEP SKIP burn>max`, blk, burnGwei.toString(), null, null, 'err');
             }
           } else {
             // Filter 4: realtime edmt.io check (only run on blocks that passed minburn)
@@ -1639,6 +1739,27 @@
     el.innerHTML = `<span style="color:var(--ok);">✓</span> = ${formatted} gwei ${cn ? '· ' + cn : ''} = ${eth.toFixed(4)} ETH ≈ <b>$${usd.toFixed(2)}</b> / 块`;
   }
 
+  function updateMaxBurnDisplay() {
+    const v = $('maxBurnInput').value;
+    const el = $('maxBurnDisplay');
+    if (!v || v === '0') {
+      el.innerHTML = '<span style="color:var(--muted);">不限上限 · 设>0 跳过超高 burn (大概率已被人占)</span>';
+      return;
+    }
+    let n;
+    try { n = BigInt(v); } catch(e) {
+      el.innerHTML = '<span style="color:var(--accent);">⚠ 无法解析 → 当作不限</span>';
+      return;
+    }
+    const eth = Number(n) / 1e9;
+    const usd = eth * ethPriceUSD;
+    let cn = '';
+    if (n >= 100000000n) cn = `≈ ${(Number(n)/1e8).toFixed(1)}亿 gwei`;
+    else if (n >= 10000n) cn = `≈ ${(Number(n)/1e4).toFixed(0)}万 gwei`;
+    const formatted = n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    el.innerHTML = `<span style="color:var(--ok);">✓</span> ≤ ${formatted} gwei ${cn ? '· ' + cn : ''} = ${eth.toFixed(4)} ETH ≈ <b>$${usd.toFixed(2)}</b> / 块`;
+  }
+
   function estimateCostUSD() {
     const priority = parseFloat($('priorityFeeInput').value || 0);
     const gas = parseFloat($('gasLimitInput').value || 35000);
@@ -1665,6 +1786,7 @@
         ethPriceUSD = j.ethereum.usd;
         updateCostEstimate();
         updateMinBurnDisplay();
+        updateMaxBurnDisplay();
       }
     } catch(e) { /* fallback to default */ }
   }
@@ -1683,12 +1805,17 @@
     document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
     updateMinBurnDisplay();
   });
+  $('maxBurnInput').addEventListener('input', () => {
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+    updateMaxBurnDisplay();
+  });
 
   // Apply default preset on load
   applyPreset('balanced');
   fetchEthPrice();
-  setInterval(fetchEthPrice, 5 * 60_000);  // refresh price every 5 min
-  renderSession();   // render empty session state on load
+  setInterval(fetchEthPrice, 5 * 60_000);
+  renderSession();
+  updateMaxBurnDisplay();
 
   // ============ Wire up ============
   $('mmConnectBtn').addEventListener('click', connectMetaMask);
